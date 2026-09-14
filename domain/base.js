@@ -11,6 +11,10 @@ const CC_COMMON = ['id', 'revision', 'createdAt', 'updatedAt'];
 
 const CC_SCHEMA = {
 
+  Loans:'lender nickname currency firstDueDate dueDay termMonths principalMinor notes status',
+  LoanSchedules:'loanId startDate endDate monthlyMinor status',
+  LoanPayments:'loanId date amountMinor currency reference notes status',
+  LoanAllocations:'loanId loanPaymentId installmentNumber amountMinor status',
   Accounts: 'bank nickname currency status reviewStatus sharedLimitGroup',
 
   Cards: 'accountId product nickname lastFour cardholder relationship replacesCardId status',
@@ -55,6 +59,7 @@ const CC_SCHEMA = {
 
 const CC_ENUMS = {
 
+  'Loans.status':['ACTIVE','COMPLETED','ARCHIVED'], 'LoanSchedules.status':['ACTIVE','VOID'], 'LoanPayments.status':['CONFIRMED','REVERSED'], 'LoanAllocations.status':['ACTIVE','REVERSED'],
   'Accounts.status': ['ACTIVE','ARCHIVED'], 'Accounts.reviewStatus': ['REVIEW','VERIFIED'],
 
   'Cards.status': ['ACTIVE','ARCHIVED'], 'Cards.relationship': ['PRIMARY','SUPPLEMENTARY','REPLACEMENT','UNKNOWN'],
@@ -83,6 +88,7 @@ const CC_ENUMS = {
 
 const CC_REQUIRED = {
 
+  Loans:'lender nickname currency firstDueDate dueDay termMonths status',LoanSchedules:'loanId startDate endDate monthlyMinor status',LoanPayments:'loanId date amountMinor currency status',LoanAllocations:'loanId loanPaymentId installmentNumber amountMinor status',
   Accounts:'bank nickname currency status reviewStatus', Cards:'accountId nickname relationship status',
 
   Transactions:'accountId transactionDate description amountMinor currency type reviewStatus status',
@@ -178,7 +184,7 @@ function apiResolveMissing(entity,id,mode,requestId) { return guard_(()=>{
   const b=db.SheetBaseline.find(r=>r.entity===entity&&r.recordId===id);if(!b)fail_('CONFLICT: No saved history for this record.');
   const previous=JSON.parse(b.payload);delete previous._acceptedDeletion;
   if(mode==='restore'){commit_(db,[{entity,before:null,after:previous}],opId,'RESTORE_DELETED');return {restored:true};}
-  const references={accountId:'Accounts',cardId:'Cards',statementId:'Statements',paymentId:'BankPayments',transactionId:'Transactions',personId:'People',shareId:'Shares',installmentPlanId:'InstallmentPlans',replacesCardId:'Cards',originTransactionId:'Transactions',matchedTransactionId:'Transactions'};
+  const references={loanId:'Loans',loanPaymentId:'LoanPayments',accountId:'Accounts',cardId:'Cards',statementId:'Statements',paymentId:'BankPayments',transactionId:'Transactions',personId:'People',shareId:'Shares',installmentPlanId:'InstallmentPlans',replacesCardId:'Cards',originTransactionId:'Transactions',matchedTransactionId:'Transactions'};
   const linked=Object.keys(CC_SCHEMA).filter(e=>!CC_INTERNAL.includes(e)).some(e=>db[e].some(r=>Object.entries(references).some(([k,target])=>target===entity&&r[k]===id)));
   if(linked)fail_('VALIDATION: Other records still reference this ID. Restore it, or reassign those records before accepting deletion.');
   const after=Object.assign({},b,{payload:JSON.stringify({...previous,_acceptedDeletion:true}),revision:Number(b.revision)+1,updatedAt:now_()});
@@ -929,11 +935,11 @@ function review_(db) {
 
       if(e!=='Settings'&&Object.values(r).some(v=>typeof v==='string'&&/(?:\d[ -]?){13,19}/.test(v)&&!/^\d{4}-\d{2}-\d{2}T/.test(v)&&!/[a-f]/i.test(v)))add(e,r,'Possible full card number: remove sensitive digits');
 
-      const refs={accountId:'Accounts',cardId:'Cards',statementId:'Statements',paymentId:'BankPayments',transactionId:'Transactions',personId:'People',shareId:'Shares',installmentPlanId:'InstallmentPlans',replacesCardId:'Cards',originTransactionId:'Transactions',matchedTransactionId:'Transactions'};
+      const refs={loanId:'Loans',loanPaymentId:'LoanPayments',accountId:'Accounts',cardId:'Cards',statementId:'Statements',paymentId:'BankPayments',transactionId:'Transactions',personId:'People',shareId:'Shares',installmentPlanId:'InstallmentPlans',replacesCardId:'Cards',originTransactionId:'Transactions',matchedTransactionId:'Transactions'};
 
       Object.keys(refs).forEach(k=>{if(r[k]&&!find(refs[k],r[k]))add(e,r,'Missing reference: '+k);});
 
-      ['accountId','cardId','statementId','transactionId','shareId','installmentPlanId','originTransactionId'].forEach(k=>{
+      ['loanId','loanPaymentId','accountId','cardId','statementId','transactionId','shareId','installmentPlanId','originTransactionId'].forEach(k=>{
 
         const parent=r[k]&&find(refs[k],r[k]);if(!parent)return;
 
@@ -945,6 +951,7 @@ function review_(db) {
 
       if(r.periodStart&&r.periodEnd&&r.periodStart>r.periodEnd)add(e,r,'Statement period is reversed');
 
+      if(e.startsWith('Loan'))loanRecordIssues_(e,r,db,(message)=>add(e,r,message));
       if(e==='Transactions'){
 
         if(['PURCHASE','FEE','INTEREST','CASH_ADVANCE','INSTALLMENT'].includes(r.type)&&Number(r.amountMinor)<0)add(e,r,'Charge type requires a nonnegative amount');

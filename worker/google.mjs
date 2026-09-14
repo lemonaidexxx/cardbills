@@ -51,9 +51,9 @@ export async function syncCalendar(env,domain,snapshot,force=true){
 export async function backupSheet(env,domain,snapshot){
  const id=snapshot.sourceSheetId;if(!/^[A-Za-z0-9_-]{20,}$/.test(id||''))throw Error('SETUP: Select the backup spreadsheet.');
  const metadata=await call(env,'sheets','spreadsheets/'+encodeURIComponent(id)+'?fields=sheets.properties');if(!metadata)throw Error('SETUP: The backup spreadsheet is unavailable.');
- const tables=domain.snapshot(),schema=domain.inspect().schema,requests=[];
+ const tables=domain.snapshot(),schema=domain.inspect().schema,requests=[];let nextSheetId=Math.max(0,...metadata.sheets.map(s=>s.properties.sheetId))+1;
  for(const [entity,rows]of Object.entries(tables)){
-  const name='CC_'+entity,match=metadata.sheets.find(s=>s.properties.title===name);if(!match)throw Error('SCHEMA: Backup table '+name+' is missing.');
+  const name='CC_'+entity;let match=metadata.sheets.find(s=>s.properties.title===name);if(!match&&['Loans','LoanSchedules','LoanPayments','LoanAllocations'].includes(entity)){const properties={sheetId:nextSheetId++,title:name,gridProperties:{rowCount:1000,columnCount:30}};requests.push({addSheet:{properties}});match={properties};}if(!match)throw Error('SCHEMA: Backup table '+name+' is missing.');
   const properties=match.properties,headers=['id','revision','createdAt','updatedAt',...schema[entity].split(' ')],last=Math.max(1,...rows.map((r,i)=>r._slot||i+2));
   if(properties.gridProperties.rowCount<last||properties.gridProperties.columnCount<headers.length)requests.push({updateSheetProperties:{properties:{sheetId:properties.sheetId,gridProperties:{rowCount:Math.max(last,properties.gridProperties.rowCount),columnCount:Math.max(headers.length,properties.gridProperties.columnCount)}},fields:'gridProperties.rowCount,gridProperties.columnCount'}});
   const cells=Array.from({length:Math.max(last,properties.gridProperties.rowCount)},()=>({values:headers.map(()=>({}))}));

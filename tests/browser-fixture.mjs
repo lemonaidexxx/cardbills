@@ -10,9 +10,10 @@ save('Statements',{accountId:a,statementDate:'2026-09-09',dueDate:'2026-09-29',b
 save('People',{name:'Alex',status:'ACTIVE'});
 const tables={};for(const [name,sheet]of f.sheets){const [columns,...rows]=sheet.data;tables[name.slice(3)]=rows.flatMap((r,i)=>r?.some(v=>v!=='')?[{...Object.fromEntries(columns.map((c,j)=>[c,r[j]??''])),_slot:i+2}]:[]);}
 tables.Shares=[{id:'synthetic-share',revision:1,transactionId:tables.Transactions[1].id,personId:tables.People[0].id,amountMinor:10000,currency:'PHP',requestStatus:'NOT_REQUESTED',status:'ACTIVE',_slot:2}];
+tables.Loans=[{id:'synthetic-loan',lender:'Example lender',nickname:'Home loan',currency:'PHP',firstDueDate:'2026-01-31',dueDay:31,termMonths:24,principalMinor:1000000,status:'ACTIVE',revision:1,_slot:2}];tables.LoanSchedules=[{id:'synthetic-schedule',loanId:'synthetic-loan',startDate:'2026-01-31',endDate:'2026-12-31',monthlyMinor:10000,status:'ACTIVE',revision:1,_slot:2}];
 tables.Transactions.push({...tables.Transactions[0],id:'duplicate-browser-tx',_slot:99});
 const owner={id:'11111111-1111-4111-8111-111111111111',email:'owner@example.test'},domain=createDomain({ownerId:owner.id,sourceSheetId:'synthetic-workbook',version:1,properties:{},tables},owner);
 
 const boot=domain.call('apiBootstrap',[]);
-const lists=Object.fromEntries(['DuplicateReview','Accounts','Cards','Transactions','Statements','People','Shares','BankPayments','PaymentAllocations','Repayments','InstallmentPlans','SavedViews','Labels','ReportConfig'].map(e=>[e,domain.call('apiList',[e,{},0,'updatedAt:desc'])]));
+const lists=Object.fromEntries(['LoanDashboard','DuplicateReview','Accounts','Cards','Transactions','Statements','People','Shares','BankPayments','PaymentAllocations','Repayments','InstallmentPlans','SavedViews','Labels','ReportConfig'].map(e=>[e,domain.call('apiList',[e,{},0,'updatedAt:desc'])]));
 console.log(JSON.stringify({boot,lists}));
