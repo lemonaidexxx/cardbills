@@ -4,7 +4,7 @@ A private financial workspace with accounts, masked cards, statements, bank paym
 
 ## Database release
 
-The Supabase migration is described in [SUPABASE_MIGRATION.md](docs/SUPABASE_MIGRATION.md). GitHub stores the code, Cloudflare executes the protected application, Supabase stores the financial ledger and existing authentication, and Google Sheets becomes a one-way backup.
+The Supabase migration is described in [SUPABASE_MIGRATION.md](docs/SUPABASE_MIGRATION.md). GitHub stores the code, Cloudflare executes the protected application, and Supabase stores all live financial tables, labels/settings, import history, audit history, recovery journal, record baselines, and existing authentication. Google Sheets is backup data storage only, receiving daily one-way copies from Supabase. Normal data retrieval and saves do not depend on Sheets or Apps Script after verified cutover.
 
 `DATA_BACKEND=supabase` enables the database runtime after the verified import. An unset value or `sheets` keeps the existing Apps Script backend during installation. The original Apps Script files are retained for rollback. They are not executed by Google in database mode.
 

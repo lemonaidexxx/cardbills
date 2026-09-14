@@ -6,13 +6,13 @@
 Browser
   -> Cloudflare Worker
      -> Supabase Auth and restricted session storage
-     -> signed HTTPS request
-        -> Google Apps Script
-           -> private Google Sheet
-           -> Google Calendar
+     -> Supabase financial storage
+
+Cloudflare scheduled/manual backup
+  -> private Google Sheet (one-way backup only)
 ```
 
-The original Apps Script financial services and vanilla-JavaScript dashboard are retained. A Cloudflare gateway replaces the browser's Apps Script RPC transport. Schema version 4 adds the UNKNOWN card relationship option while preserving the existing table columns.
+This describes the target production architecture with `DATA_BACKEND=supabase`; activation follows verified import and cutover. The vanilla-JavaScript dashboard is retained, and the build compiles the existing financial rules into Cloudflare. Normal loading, retrieval, calculations, and saves do not call Apps Script or Google Sheets. Schema version 4 adds the UNKNOWN card relationship option while preserving the existing table columns.
 
 ## Authentication
 
@@ -26,17 +26,17 @@ MFA rotates the session identifier and deletes the pre-authentication session. L
 
 ## Access controls
 
-The financial API uses an explicit operation allowlist at both Cloudflare and Apps Script. State-changing requests require an exact matching Origin and JSON content. Browser responses set a restrictive Content Security Policy, frame protection, MIME sniffing protection, no-referrer, HSTS and no-store caching.
+The financial API uses an explicit operation allowlist in Cloudflare. State-changing requests require an exact matching Origin and JSON content. Browser responses set a restrictive Content Security Policy, frame protection, MIME sniffing protection, no-referrer, HSTS and no-store caching.
 
 Rate limits use atomic database operations. Password attempts have both a per-IP limit and an owner-wide limit. MFA and enrollment have owner-wide and per-IP limits. Database table permissions and RLS restrict the session and attempt tables to the server role.
 
-Cloudflare signs backend requests with HMAC-SHA256. Apps Script validates the signature, timestamp, one-use nonce, configured owner UUID and effective Google deployment owner. Nonces are stored under a script lock for replay detection. The Apps Script public functions also check the Google owner for direct administrative use. The deployment owner's Google account and Sheet editors are privileged administrators with direct access to the financial store.
+Supabase financial access requires the configured owner and verified MFA. Client grants and row-level security restrict access; financial writes go through the protected Worker and database commit functions. The legacy signed Apps Script bridge is retained only for the separately configured Sheets backend and is unused in Supabase mode. Google failures never trigger a fallback to that bridge.
 
 ## Financial storage
 
-Google Sheets holds the financial entities and their relationships. Currency values use integer minor units; PHP has two decimal places. Explicit entity IDs survive sorting and renaming. Operations use a journal with repeat-safe request IDs, source identities, validation and recovery records. Sheet locks serialize script operations; row-level checks detect conflicting manual edits.
+Supabase holds all live financial entities and their relationships, labels/settings, import history, audit history, recovery journal, and record baselines. Currency values use integer minor units; PHP has two decimal places. Explicit entity IDs survive sorting and renaming. Operations use a journal with repeat-safe request IDs, source identities, validation and recovery records. Cloudflare serializes financial changes, and database commits enforce workspace version checks.
 
-Original and cleaned descriptions are separate fields. Technical identifiers are protected with warning-only Sheet protections. User-controlled text is rendered through textContent and written with formula protection. Only masked card information is part of the operational model.
+Original and cleaned descriptions are separate fields. User-controlled text is rendered through textContent. Backups write literal Sheet values and preserve unrelated tabs. Only masked card information is part of the operational model. Sheet edits do not update the live database.
 
 Imported signed activity, official statement balances, bank payments and personal receivables are separate measures. Blank official balances remain unknown. Unclassified activity is visible for review. Personal repayment records and bank-payment records have separate allocation rules.
 
@@ -44,16 +44,19 @@ Imported signed activity, official statement balances, bank payments and persona
 
 | Destination | Contents |
 | --- | --- |
-| Google Sheet | Financial tables, labels/settings, import history, audit history, recovery journal and record baselines |
-| Apps Script properties | Sheet configuration, owner identities, bridge secret, nonce/trigger metadata |
+| Supabase | Financial tables, labels/settings, import history, audit history, recovery journal and record baselines |
+| Google Sheet | Backup data storage only: daily one-way copies from Supabase, with manual backup available |
 | Supabase Auth | Application user, password verification state and authenticator state |
 | Supabase public tables with restricted grants | Encrypted application sessions and hashed attempt counters |
-| Cloudflare secrets | Supabase server credentials, owner configuration, session key and bridge secret |
+| Cloudflare | Application runtime, financial rules, request handling and scheduled backups |
+| Cloudflare secrets | Supabase server credentials, owner configuration, session key and dedicated Sheets backup credentials |
 | GitHub | Source code, schema installation, tests and documentation |
 
 ## Administration
 
-Keep enrollment enabled only during initial setup or a deliberate recovery. Protect your Google, GitHub, Cloudflare and Supabase administrator accounts with their own MFA. Anyone with edit access to the Apps Script project can inspect its properties; anyone with direct Sheet edit access can change financial records. Limit both groups to trusted administrators.
+Keep enrollment enabled only during initial setup or a deliberate recovery. Protect your Google, GitHub, Cloudflare and Supabase administrator accounts with their own MFA. Limit database administration and backup-Sheet access to trusted administrators. Sheet access permits reading or altering backup copies, so keep it restricted even though it does not change live records.
+
+Daily backups use `BackupEnabled=true`, `BackupDays=1`, and `SyncEnabled=false`. Calendar synchronization is disabled. Backup failures are reported separately and do not block normal financial retrieval or saves. Retire the external Apps Script deployments and triggers only after the cutover and initial backup are verified; see [Apps Script retirement](APPS-SCRIPT-RETIREMENT.md).
 
 Use the current Supabase publishable and secret keys. The secret key is sent only from the Worker in the apikey header. User-token Authorization headers are used for Auth requests. API-key background: https://supabase.com/docs/guides/getting-started/api-keys
 

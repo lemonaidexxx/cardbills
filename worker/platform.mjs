@@ -1,9 +1,13 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 
+const dateFormatters=new Map();
+
 export function formatLocal(date, zone, pattern) {
   const d = new Date(date);
   if (!Number.isFinite(d.getTime())) throw new Error('VALIDATION: Invalid date.');
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d).map(p=>[p.type,p.value]));
+  let formatter=dateFormatters.get(zone);
+  if(!formatter){formatter=new Intl.DateTimeFormat('en-CA', {timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});if(dateFormatters.size>=32)dateFormatters.delete(dateFormatters.keys().next().value);dateFormatters.set(zone,formatter);}
+  const parts = Object.fromEntries(formatter.formatToParts(d).map(p=>[p.type,p.value]));
   const day = `${parts.year}-${parts.month}-${parts.day}`, time = `${parts.hour}:${parts.minute}`;
   const local = Date.UTC(+parts.year,+parts.month-1,+parts.day,+parts.hour,+parts.minute,+parts.second);
   const offset = Math.round((local - Math.floor(d.getTime()/1000)*1000)/60000);

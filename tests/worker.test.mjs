@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { configuration, requireSameOrigin, readJson, hmac, seal, unseal, claimsAfterVerification, cookieToken, harden } from '../worker/index.mjs';
+import {FINANCIAL_REVISION} from '../worker/finance.mjs';
 
 const env = { APP_ORIGIN:'https://cardbills.example.test',SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'anon',SUPABASE_SECRET_KEY:'service',OWNER_USER_ID:'11111111-1111-4111-8111-111111111111',OWNER_EMAIL:'owner@example.test',OWNER_USERNAME:'owner',SESSION_KEY:'a'.repeat(64),BRIDGE_SECRET:'b'.repeat(64),APPS_SCRIPT_URL:'https://script.google.com/macros/s/example/exec' };
 const post = (origin=env.APP_ORIGIN,type='application/json',body='{}') => new Request(env.APP_ORIGIN+'/api/login',{method:'POST',headers:{Origin:origin,'Content-Type':type,'Sec-Fetch-Site':origin===env.APP_ORIGIN?'same-origin':'cross-site'},body});
@@ -8,6 +9,7 @@ const post = (origin=env.APP_ORIGIN,type='application/json',body='{}') => new Re
 test('configuration rejects missing values', () => assert.throws(() => configuration({}), /settings/));
 test('configuration rejects untrusted backend hosts', () => assert.throws(() => configuration({...env,APPS_SCRIPT_URL:'https://other.example.test/exec'})));
 test('configuration accepts complete deployment values', () => assert.doesNotThrow(() => configuration(env)));
+test('health reports the financial runtime release and selected backend',async()=>{for(const backend of ['sheets','supabase']){const response=await worker.fetch(new Request(env.APP_ORIGIN+'/health'),{...env,DATA_BACKEND:backend},{});const body=await response.json();assert.equal(body.release,FINANCIAL_REVISION);assert.equal(body.financialBackend,backend);}});
 test('same-origin JSON mutations are accepted', () => assert.doesNotThrow(() => requireSameOrigin(post(),env)));
 test('cross-origin mutations are rejected', () => assert.throws(() => requireSameOrigin(post('https://other.example.test'),env)));
 test('form encoded mutations are rejected', () => assert.throws(() => requireSameOrigin(post(env.APP_ORIGIN,'application/x-www-form-urlencoded'),env)));

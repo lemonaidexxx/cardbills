@@ -19,7 +19,7 @@ function billsPaymentSources_(db) {
 function billsBootstrap(view) {
   return guard_(() => {
     const db=load_(),issues=review_(db),configuration=configuration_(db),diagnostics=diagnostics_(db);
-    configuration.labels['app.title']='BillsBills'; configuration.labels['app.subtitle']='';
+    configuration.labels['app.title']='BillBills'; configuration.labels['app.subtitle']='';
     diagnostics.workflowRevision=BB_WORKFLOW_REVISION;diagnostics.reviewBatchRevision=BB_REVIEW_BATCH_REVISION;
     diagnostics.triggers=ScriptApp.getProjectTriggers().filter(t=>['onSheetEdit_','reconcile_','reconcileBillsBills_'].includes(t.getHandlerFunction())).map(t=>({handler:t.getHandlerFunction(),id:t.getUniqueId()}));
     return {version:CC_VERSION,today:today_(db),schema:CC_SCHEMA,enums:CC_ENUMS,required:CC_REQUIRED,currencies:CC_CURRENCY,configuration,settings:clientSettings_(db),lookups:lookups_(db),overview:overview_(db,issues),issues:issues.slice(0,200),diagnostics,workflowRevision:BB_WORKFLOW_REVISION,reviewBatchRevision:BB_REVIEW_BATCH_REVISION,tagOptions:billsTagOptions_(db),paymentSources:billsPaymentSources_(db),currentPage:view&&view.entity?billsListView_(db,issues,view.entity,view.filters,view.page,view.sort):null};

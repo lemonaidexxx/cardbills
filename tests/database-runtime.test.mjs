@@ -41,6 +41,15 @@ test('browser data expires and clears, with server fallback for unsupported enti
 test('confirmed classification updates patch the cached row',()=>{const {cache:c}=cache();c.load({loadedAt:1000,issues:[],tables:{Transactions:[{id:'one',type:'UNKNOWN',updatedAt:''}]}});c.patch([{id:'one',type:'FEE',updatedAt:''}],[]);assert.equal(c.list('Transactions',{type:'FEE'}).total,1);});
 
 test('financial engine denies access before any database request',async()=>{const engine=new BillsBillsEngine({}, {OWNER_USER_ID:owner.id});const response=await engine.fetch(new Request('https://internal/finance',{method:'POST',body:JSON.stringify({session:{user:owner,complete:false},action:'apiBootstrap',args:[]})}));assert.equal(response.status,403);});
+
+test('read cache rechecks authorization and reloads on database version changes',async()=>{
+ const {snapshot}=sample(),old=globalThis.fetch;let version=1,heads=0,snapshots=0,denied=false;
+ globalThis.fetch=async(url)=>{if(url.endsWith('/bb_read_version')){heads++;return denied?Response.json({message:'ACCESS_DENIED: Authenticator verification required.'},{status:403}):Response.json({ownerId:owner.id,version,day:'2026-09-14'});}if(url.endsWith('/bb_snapshot')){snapshots++;return Response.json({...snapshot,version});}throw Error('Unexpected request');};
+ try{const engine=new BillsBillsEngine({}, {OWNER_USER_ID:owner.id,OWNER_EMAIL:owner.email,SUPABASE_URL:'https://project.supabase.co',SUPABASE_PUBLISHABLE_KEY:'pub'}),session={user:owner,complete:true,id:'a'.repeat(64),token:'verified-token'};
+ const invoke=()=>engine.fetch(new Request('https://internal/finance',{method:'POST',body:JSON.stringify({session,action:'apiBootstrap',args:[]})}));
+ const first=await (await invoke()).json();assert.equal(first.data.browseSnapshot,undefined);assert.ok(first.data.reviewBatchRevision);await invoke();assert.equal(heads,2);assert.equal(snapshots,1);version++;const changed=await (await invoke()).json();assert.equal(changed.data.databaseVersion,2);assert.equal(snapshots,2);denied=true;assert.equal((await invoke()).status,403);
+ }finally{globalThis.fetch=old;}
+});
 test('runtime calls Supabase directly and forwards exact idempotency identity',async()=>{
  const {snapshot}=sample(),old=globalThis.fetch,calls=[];let stored=structuredClone(snapshot),receipt=null;
  globalThis.fetch=async(url,options)=>{const body=JSON.parse(options.body);calls.push({url,body,headers:options.headers});if(url.endsWith('/bb_snapshot'))return Response.json(receipt?{replayed:true,result:receipt}:stored);if(url.endsWith('/bb_commit')){assert.equal(body.p_owner,owner.id);assert.equal(body.p_session,'a'.repeat(64));assert.equal(body.p_version,1);receipt=body.p_result;return Response.json(receipt);}throw Error('Unexpected network call');};
@@ -52,7 +61,7 @@ test('new deployment uses a Durable Object and preserves legacy-mode default',()
 
 test('failed manual backup commits only error metadata and normal reads remain database-only',async()=>{
  const {snapshot}=sample(),old=globalThis.fetch,calls=[];snapshot.properties.LAST_BACKUP='2026-09-01T00:00:00Z';snapshot.properties.LAST_BACKUP_VERSION='1';
- globalThis.fetch=async(url,options)=>{calls.push(url);if(url.endsWith('/bb_snapshot'))return Response.json(snapshot);if(url.endsWith('/bb_commit')){const body=JSON.parse(options.body);assert.deepEqual(body.p_changes,[]);assert.equal(body.p_properties.LAST_BACKUP,snapshot.properties.LAST_BACKUP);assert.equal(body.p_properties.LAST_BACKUP_VERSION,'1');assert.match(body.p_properties.BACKUP_ERROR,/service account/);return Response.json(body.p_result);}throw Error('Unexpected provider request');};
+ globalThis.fetch=async(url,options)=>{calls.push(url);if(url.endsWith('/bb_read_version'))return Response.json({ownerId:owner.id,version:snapshot.version,day:'2026-09-14'});if(url.endsWith('/bb_snapshot'))return Response.json(snapshot);if(url.endsWith('/bb_commit')){const body=JSON.parse(options.body);assert.deepEqual(body.p_changes,[]);assert.equal(body.p_properties.LAST_BACKUP,snapshot.properties.LAST_BACKUP);assert.equal(body.p_properties.LAST_BACKUP_VERSION,'1');assert.match(body.p_properties.BACKUP_ERROR,/service account/);return Response.json(body.p_result);}throw Error('Unexpected provider request');};
  try{const engine=new BillsBillsEngine({}, {OWNER_USER_ID:owner.id,OWNER_EMAIL:owner.email,SUPABASE_URL:'https://project.supabase.co',SUPABASE_PUBLISHABLE_KEY:'pub',SUPABASE_SECRET_KEY:'sb_secret_test'}),session={user:owner,complete:true,id:'a'.repeat(64),token:'verified-token'};
  const invoke=action=>engine.fetch(new Request('https://internal/finance',{method:'POST',body:JSON.stringify({session,action,args:[]})}));
  assert.equal((await invoke('apiBackup')).status,502);assert.equal((await invoke('apiBootstrap')).status,200);assert.ok(calls.every(url=>url.startsWith('https://project.supabase.co/')));

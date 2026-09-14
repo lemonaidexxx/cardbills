@@ -14,7 +14,7 @@ replace("return json({ data: await bridge(env, session, body.action, body.args) 
       }
       return json({ data: await bridge(env, session, body.action, body.args) });`);
 replace("'/styles.css','/favicon.svg'", "'/styles.css','/browse-cache.js','/favicon.svg'");
-replace("if (url.pathname === '/health') return json({ status: 'running' });","if (url.pathname === '/health') return json({ status: 'running', release: 'supabase-20260913-1', financialBackend: env.DATA_BACKEND === 'supabase' ? 'supabase' : 'sheets' });");
+replace("if (url.pathname === '/health') return json({ status: 'running' });","if (url.pathname === '/health') return json({ status: 'running', release: FINANCIAL_REVISION, financialBackend: env.DATA_BACKEND === 'supabase' ? 'supabase' : 'sheets' });");
 replace("export default {\n  async fetch",`export default {
   async scheduled(event,env,ctx) {
     if (env.DATA_BACKEND !== 'supabase' || !env.FINANCE_ENGINE || !env.GOOGLE_SERVICE_ACCOUNT_JSON) return;
@@ -22,7 +22,7 @@ replace("export default {\n  async fetch",`export default {
     ctx.waitUntil(stub.fetch('https://internal/finance',{method:'POST',body:JSON.stringify({kind:'automation'})}).then(async r=>{if(!r.ok)throw Error('Scheduled integration needs review.');}));
   },
   async fetch`);
-fs.writeFileSync(new URL('worker/runtime.generated.mjs',root),source);
+fs.writeFileSync(new URL('worker/runtime.generated.mjs',root),"import {FINANCIAL_REVISION} from './finance.mjs';\n"+source);
 const htmlPath=new URL('public/app.html',root);let html=fs.readFileSync(htmlPath,'utf8');
-if(!html.includes('/browse-cache.js'))html=html.replace('<script defer src="/app.js','<script defer src="/browse-cache.js?v=supabase-20260913-1"></script><script defer src="/app.js');
+html=html.replace(/<script defer src="\/browse-cache\.js[^\"]*"><\/script>/g,'');
 fs.writeFileSync(htmlPath,html);

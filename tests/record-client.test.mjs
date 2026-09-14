@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+const source=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8').split('(() => {')[0];
+function client(send){const context=vm.createContext({setTimeout});vm.runInContext(source,context);return context.createRecordClient(send);}
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+test('independent reads run together and duplicate reads share a request',async()=>{
+ const calls=[],done=[];const call=client(payload=>new Promise(resolve=>{calls.push(JSON.parse(payload));done.push(resolve);}));
+ const first=call('apiList',['Transactions']),duplicate=call('apiList',['Transactions']),second=call('apiList',['Cards']);
+ assert.equal(calls.length,2);done[1]('cards');assert.equal(await second,'cards');done[0]('transactions');assert.equal(await first,'transactions');assert.equal(await duplicate,'transactions');
+});
+test('writes form a barrier between reads and preserve submission order',async()=>{
+ const calls=[],done=[];const call=client(payload=>new Promise(resolve=>{calls.push(JSON.parse(payload).action);done.push(resolve);}));
+ const jobs=[call('apiList',[]),call('apiSave',['first']),call('apiSave',['second']),call('apiBootstrap',[])];
+ assert.deepEqual(calls,['apiList']);done.shift()(1);await tick();assert.deepEqual(calls,['apiList','apiSave']);done.shift()(2);await tick();assert.equal(calls.length,3);done.shift()(3);await tick();assert.equal(calls.at(-1),'apiBootstrap');done.shift()(4);await Promise.all(jobs);
+});
+test('obsolete queued reads are skipped and failures release the queue',async()=>{
+ let finish,keep=true;const calls=[];const call=client(payload=>{const name=JSON.parse(payload).action;calls.push(name);return name==='apiSave'?new Promise(resolve=>finish=resolve):Promise.reject(Error('failed'));});
+ const save=call('apiSave'),stale=call('apiList',[],()=>keep);keep=false;finish();await save;assert.equal(await stale,null);assert.deepEqual(calls,['apiSave']);await assert.rejects(call('apiBootstrap'),/failed/);await assert.rejects(call('apiList'),/failed/);
+});

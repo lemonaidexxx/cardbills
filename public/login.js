@@ -59,7 +59,7 @@
     const svg = typeof factor.qr === 'string' && factor.qr.startsWith('<svg') ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(factor.qr) : factor.qr;
     if (typeof svg !== 'string' || !svg.startsWith('data:image/svg+xml')) throw Error('Authenticator QR data needs review.');
     $('qr').src = svg; $('secret').textContent = factor.secret;
-    $('factor').replaceChildren(new Option('Cardbills authenticator', factor.id));
+    $('factor').replaceChildren(new Option('BillBills authenticator', factor.id));
     $('enrollment').hidden = false; $('mfa-form').hidden = false; $('start-enrollment').hidden = true;
     $('otp').focus();
   }));

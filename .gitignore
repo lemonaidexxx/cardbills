@@ -13,3 +13,4 @@ worker/runtime.generated.mjs
 current-ledger.json
 BillsBills_Private_Migration*/
 *Private_Migration*.zip
+BillsBills_Supabase_Source_Update_Complete.zip

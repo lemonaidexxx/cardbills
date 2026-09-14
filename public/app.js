@@ -5,16 +5,19 @@ function createRecordClient(send, options = {}) {
   const shared = new Map();
   const pause = options.pause || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const exclusive = options.exclusive || (fn => fn());
-  let running = false;
+  let running = 0;
+  let writing = false;
   let generation = 0;
 
   async function pump() {
-    if (running) return;
-    running = true;
-    while (pending.length) {
+    if (writing) return;
+    while (pending.length && running < 4) {
+      if (!pending[0].read && running) return;
       const item = pending.shift();
-      try {
-        const value = await exclusive(async () => {
+      running++;
+      if (!item.read) writing = true;
+      void (async()=>{try {
+        const execute = async () => {
           for (let attempt = 0; ; attempt++) {
             if (!item.guards.some(keep => keep())) {
               if (item.key && shared.get(item.key) === item) shared.delete(item.key);
@@ -26,12 +29,14 @@ function createRecordClient(send, options = {}) {
               await pause(750 * (attempt + 1) + Math.floor(Math.random() * 250));
             }
           }
-        });
+        };
+        const value = await (item.read ? execute() : exclusive(execute));
         item.resolve(value);
       } catch (error) { item.reject(error); }
-      finally { if (item.key && shared.get(item.key) === item) shared.delete(item.key); }
+      finally { if (item.key && shared.get(item.key) === item) shared.delete(item.key); running--;if(!item.read)writing=false;void pump(); }
+      })();
+      if (!item.read) return;
     }
-    running = false;
   }
 
   function call(name, args = [], keep = () => true) {
@@ -158,7 +163,7 @@ function createTransactionDrafts() {
     choose.setAttribute('aria-label','Select a tag');newName.placeholder='New tag name';newName.maxLength=60;newName.setAttribute('aria-label','New tag name');creator.hidden=true;
     const draw=()=>{chips.replaceChildren();chosen.forEach(name=>{const remove=button(name+' x',()=>{chosen=chosen.filter(t=>t!==name);draw();wrap.dispatchEvent(new Event('change',{bubbles:true}));},'tag-chip');remove.setAttribute('aria-label','Remove tag '+name);chips.append(remove);});choose.replaceChildren(new Option('Select a tag...',''));const values=[...new Set([...(state.boot.tagOptions||[]),...(staged?transactionDrafts.tags():[]),...chosen])].sort((a,b)=>a.localeCompare(b));values.forEach(t=>{if(!chosen.some(v=>v.toLowerCase()===t.toLowerCase()))choose.append(new Option(t,t));});choose.append(new Option('+ Add new tag','__new_tag__'));};
     choose.addEventListener('change',()=>{if(choose.value==='__new_tag__'){creator.hidden=false;newName.focus();choose.value='';return;}if(choose.value){chosen.push(choose.value);draw();wrap.dispatchEvent(new Event('change',{bubbles:true}));}});
-    add.addEventListener('click',async()=>{error.textContent='';const name=newName.value.trim();if(!name)return;add.disabled=true;try{if(!name||name.length>60||/[,\r\n\x00-\x1f]/.test(name))throw Error('Enter a tag of 1 to 60 characters without commas or line breaks.');let options=[...(state.boot.tagOptions||[]),...transactionDrafts.tags()];if(!staged){if(!state.boot.workflowRevision)throw Error('Install the Cardbills backend update to save new tags.');const r=await rpc('apiSave','TagOption',{name},'',uuid());state.boot.tagOptions=r.tagOptions;options=r.tagOptions;}const stored=options.find(t=>t.toLowerCase()===name.toLowerCase())||name;if(!chosen.some(t=>t.toLowerCase()===stored.toLowerCase()))chosen.push(stored);newName.value='';creator.hidden=true;draw();wrap.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){error.textContent=e.message;}finally{add.disabled=false;}});
+    add.addEventListener('click',async()=>{error.textContent='';const name=newName.value.trim();if(!name)return;add.disabled=true;try{if(!name||name.length>60||/[,\r\n\x00-\x1f]/.test(name))throw Error('Enter a tag of 1 to 60 characters without commas or line breaks.');let options=[...(state.boot.tagOptions||[]),...transactionDrafts.tags()];if(!staged){if(!state.boot.workflowRevision)throw Error('Install the BillBills backend update to save new tags.');const r=await rpc('apiSave','TagOption',{name},'',uuid());state.boot.tagOptions=r.tagOptions;options=r.tagOptions;}const stored=options.find(t=>t.toLowerCase()===name.toLowerCase())||name;if(!chosen.some(t=>t.toLowerCase()===stored.toLowerCase()))chosen.push(stored);newName.value='';creator.hidden=true;draw();wrap.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){error.textContent=e.message;}finally{add.disabled=false;}});
     append(creator,newName,add);append(wrap,chips,choose,creator,error);Object.defineProperty(wrap,'value',{get:()=>chosen.join(', '),set:value=>{chosen=String(value||'').split(',').map(t=>t.trim()).filter(Boolean);draw();}});draw();return wrap;
   }
   function updateReviewControls(){
@@ -211,7 +216,7 @@ function createTransactionDrafts() {
   }
   async function saveReviewChanges(){
     if(reviewSaving||!transactionDrafts.size())return;
-    if(!state.boot.reviewBatchRevision){reviewMessage='Install the bottom-save Workspace.gs update and deploy it, then Refresh data. Your selections stay pending.';updateReviewFooter();return;}
+    if(!state.boot.reviewBatchRevision){reviewMessage='The connected backend does not support batch saving yet. Refresh after the application update. Your selections remain pending.';updateReviewFooter();return;}
     if(!reviewJob)reviewJob={groups:transactionDrafts.batches().map(items=>({items,id:uuid()})),cursor:0,total:transactionDrafts.size(),saved:0};
     reviewSaving=true;reviewMessage='Saving pending classifications...';updateReviewFooter();
     try{
@@ -261,7 +266,7 @@ function createTransactionDrafts() {
     };mode.addEventListener('change',update);source.addEventListener('change',()=>{date.value='';update();});update();
     let requestId=uuid(),pendingSignature='';
     form.addEventListener('submit',async event=>{event.preventDefault();save.disabled=true;status.textContent='Saving payment information...';try{
-      if(!state.boot.workflowRevision)throw Error('Install the Cardbills backend update to use statement payment shortcuts.');
+      if(!state.boot.workflowRevision)throw Error('Install the BillBills backend update to use statement payment shortcuts.');
       const [kind,id]=source.value.split(':'),paying=['FULL','PARTIAL'].includes(mode.value),data={statementId:r.id,mode:mode.value,source:kind,paymentId:kind==='PAYMENT'?id:'',transactionId:kind==='TRANSACTION'?id:'',amountMinor:paying?toMinor(amount.value,r.currency):0,date:date.value,reference:reference.value};
       const signature=JSON.stringify(data);if(pendingSignature&&pendingSignature!==signature)requestId=uuid();pendingSignature=signature;
       const result=await rpc('apiSave','StatementPayment',data,r._token,requestId);Object.assign(r,result.row);applyWorkflowResult(result);$('dialog').close();const cached=state.pageEntity===state.entity?state.pageResult:null;if(cached)cached.rows=cached.rows.map(x=>x.id===r.id?r:x);await render(cached);notice('Payment information saved. Confirmed allocations determine settlement.');
@@ -319,7 +324,7 @@ function createTransactionDrafts() {
       const b=await rpc('apiBootstrap',view);
       if(version!==recordClient.version())return;
       state.boot=b;
-      document.querySelector('.brand-title').textContent='Cardbills';document.title='Cardbills';
+      document.querySelector('.brand-title').textContent='BillBills';document.title='BillBills';
       $('refresh').textContent='Refresh';
       notice(b.overview.invalid?'Invalid records or pending operations need review. Financial overview totals are withheld.':'');
       renderNav();await render(viewKey===JSON.stringify(currentView())?b.currentPage:null);
@@ -328,13 +333,16 @@ function createTransactionDrafts() {
     return entry.promise;
   }
   $('refresh').addEventListener('click',()=>action(refresh));
-  async function render(prefetched){if(!state.boot)return;updateReviewFooter();const seq=++state.sequence;$('title').textContent=areaName(state.area);$('content').replaceChildren();renderContext();
+  let renderedView='';
+  async function render(prefetched){if(!state.boot)return;updateReviewFooter();const seq=++state.sequence,view=state.area+'|'+state.entity,sameView=renderedView===view,scroll=$('main').scrollTop;$('title').textContent=areaName(state.area);
+    const listView=!['Overview','Review','Settings and Integration'].includes(state.area);
+    let result=prefetched;
+    if(listView){try{result=result||await recordClient('apiList',[state.entity,{...state.filters},state.page,state.sort],()=>seq===state.sequence);if(seq!==state.sequence)return;}catch(e){if(seq===state.sequence)notice(e.message,'error');return;}}
+    $('content').replaceChildren();renderContext();renderedView=view;
     if(state.area==='Overview'){renderOverview();return;}
     if(state.area==='Review'){renderReview();return;}
     if(state.area==='Settings and Integration'){renderSettings();return;}
-    renderToolbar();const container=el('div');$('content').append(container);container.append(el('div','empty','Loading records…'));
-    try{const result=prefetched||await recordClient('apiList',[state.entity,state.filters,state.page,state.sort],()=>seq===state.sequence);if(seq!==state.sequence)return;container.replaceChildren();renderTable(container,result);}
-    catch(e){if(seq===state.sequence){container.replaceChildren(el('div','empty',e.message));notice(e.message,'error');}}
+    renderToolbar();const container=el('div');$('content').append(container);renderTable(container,result);if(sameView)$('main').scrollTop=scroll;
   }
   function renderOverview(){const o=state.boot.overview,c=$('content');const intro=el('section','overview-intro');append(intro,el('h2','','Your finances, clearly organized.'),el('p','subtle','Track spending, manage balances and review what needs your attention.'),button('Review transactions',()=>navigate('Review'),'secondary'));c.append(intro);
     if(o.invalid)c.append(el('div','review-banner','Totals are unavailable until invalid records and pending operations are resolved. Open Review for details.'));
@@ -359,7 +367,7 @@ function createTransactionDrafts() {
     bar.append(button('Add '+label(state.entity).toLowerCase(),()=>editRecord(state.entity)));
     if(state.entity==='Transactions'){bar.append(button('Import CSV',showImport));bar.append(button('Import reviewed package',showPackageImport));bar.append(button('Type guide',showTypeGuide));}
     if(state.entity==='Shares')bar.append(button('Preview report',showReport));
-    if(state.entity==='Statements')bar.append(button('Synchronize statement events',synchronizeStatements));
+    if(state.entity==='Statements'&&state.boot.storage!=='supabase')bar.append(button('Synchronize statement events',synchronizeStatements));
     c.append(bar);
     const more=el('details');more.open=Object.keys(state.filters).some(k=>k!=='q'&&state.filters[k]);more.append(el('summary','','Filters and sorting'));
     const f=el('div','filters');
@@ -563,7 +571,7 @@ function createTransactionDrafts() {
       try{
         const selected=file.files[0];if(!selected)return;if(selected.size>1500000)throw Error('Choose a package smaller than 1.5 MB.');
         const p=JSON.parse(await selected.text());
-        if(p.format!=='cardbills-reviewed-v1'||!Array.isArray(p.records)||p.records.length<1||p.records.length>6000||!/^[-a-f0-9]{36}$/.test(p.id)||!/^[a-f0-9]{64}$/.test(p.sourceHash)||!p.expected)throw Error('Choose a Cardbills reviewed package.');
+        if(p.format!=='cardbills-reviewed-v1'||!Array.isArray(p.records)||p.records.length<1||p.records.length>6000||!/^[-a-f0-9]{36}$/.test(p.id)||!/^[a-f0-9]{64}$/.test(p.sourceHash)||!p.expected)throw Error('Choose a BillBills reviewed package.');
         const tx=p.records.filter(r=>r.entity==='Transactions');let total=0,debits=0,credits=0;
         for(const item of tx){const r=item.record;if(r.currency!=='PHP'||!Number.isSafeInteger(r.amountMinor))throw Error('Check the package currency and amounts.');total+=r.amountMinor;if(r.amountMinor>0)debits+=r.amountMinor;else credits+=r.amountMinor;}
         if(tx.length!==p.expected.transactions||total!==p.expected.netMinor||debits!==p.expected.debitMinor||credits!==p.expected.creditMinor)throw Error('Package totals need review.');
