@@ -214,3 +214,18 @@ test('resolved transactions leave Review without changing other records',()=>{
  const {snapshot}=sample();let d=createDomain(snapshot,owner),r=row(d,'Transactions');assert.ok(d.call('apiList',['ReviewTransactions',{},0,'']).rows.some(x=>x.id===r.id));
  d.call('apiSave',['Transactions',{id:r.id,type:'PURCHASE',reviewStatus:'VERIFIED'},r._token,randomUUID()]);d=createDomain(apply(snapshot,d),owner);assert.ok(!d.call('apiList',['ReviewTransactions',{},0,'']).rows.some(x=>x.id===r.id));
 });
+
+test('upcoming loans select earliest unpaid, retain partial amounts, and omit settled installments',()=>{
+ let {snapshot,d,id}=loanSample();let loan=d.call('apiList',['LoanDashboard',{loanId:id},0,'']).loans[0];
+ d.call('apiSave',['LoanPayment',{loanId:id,date:'2024-02-01',amountMinor:14000,allocations:[{number:1,amountMinor:10000},{number:2,amountMinor:4000}]},loan._token,randomUUID()]);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);const r=d.call('apiList',['UpcomingLoans',{},0,'']).rows[0];assert.equal(r.nextDueDate,'2024-02-29');assert.equal(r.nextRemainingMinor,6000);assert.equal(r.unknownInstallments,24);assert.equal(r.installments,undefined);assert.equal(d.changes().length,0);
+});
+test('loan summary is bounded, globally sorted, filtered and currency separated',()=>{
+ const {snapshot}=loanSample(),base=snapshot.tables.Loans[0];snapshot.tables.Loans=Array.from({length:85},(_,i)=>({...base,id:randomUUID(),_slot:i+2,nickname:String(84-i).padStart(3,'0'),currency:i%2?'USD':'PHP',status:i===84?'ARCHIVED':'ACTIVE'}));snapshot.tables.LoanSchedules=[];
+ const d=createDomain(snapshot,owner),a=d.call('apiList',['LoanList',{},0,'nickname:asc']),b=d.call('apiList',['LoanList',{},1,'nickname:asc']);assert.equal(a.rows.length,40);assert.equal(a.rows[0].nickname,'000');assert.equal(b.rows[0].nickname,'040');assert.deepEqual(Object.keys(a.loanTotals).sort(),['PHP','USD']);assert.equal(d.call('apiList',['UpcomingLoans',{},0,'']).total,84);assert.equal(a.rows[0].nextRemainingMinor,null);assert.equal(d.call('apiList',['LoanList',{q:'080',currency:'PHP'},0,'']).total,1);
+});
+test('inline loan details preserve financial terms, reject stale writes and retry safely',()=>{
+ let {snapshot,d,id}=loanSample();const before=d.call('apiList',['LoanList',{},0,'']).rows[0],request=randomUUID(),input={id,nickname:'New name',lender:'New lender',notes:'Updated',status:'ACTIVE'};
+ assert.throws(()=>d.call('apiSave',['LoanDetails',input,'stale',randomUUID()]),/CONFLICT/);assert.throws(()=>d.call('apiSave',['LoanDetails',{id,principalMinor:1},before._token,randomUUID()]),/financial terms/);assert.equal(d.changes().length,0);
+ d.call('apiSave',['LoanDetails',input,before._token,request]);snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);assert.equal(d.call('apiSave',['LoanDetails',input,before._token,request]).replayed,true);const after=d.call('apiList',['LoanList',{},0,'']).rows[0];assert.equal(after.nickname,'New name');assert.equal(after.principalMinor,before.principalMinor);assert.equal(after.termMonths,before.termMonths);assert.equal((snapshot.tables.LoanPayments||[]).length,0);assert.ok(snapshot.tables.AuditHistory.some(r=>r.entity==='Loans'));
+});
