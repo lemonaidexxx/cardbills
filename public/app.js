@@ -374,7 +374,7 @@ const intro=el('section','overview-intro');append(intro,el('h2','','Your finance
   }
   function renderToolbar(){
     const c=$('content'),tabs=areas[state.area];if(tabs.length>1){const t=el('div','section-tabs');tabs.forEach(e=>t.append(button(label(e),()=>{state.entity=e;state.filters={};state.page=0;render();},e===state.entity?'active':'')));c.append(t);}
-    const bar=el('div','toolbar');const filters=button('Filters',showTableFilters);filters.prepend(icon('filter'));bar.append(filters);
+    const bar=el('div','toolbar'),search=input(state.filters.q||'','search');search.placeholder='Descriptions, names and notes';search.setAttribute('aria-label','Search');search.addEventListener('change',()=>{if(search.value.trim())state.filters.q=search.value.trim();else delete state.filters.q;state.page=0;render();});bar.append(field('Search',search));const filters=button('Filters',showTableFilters);filters.prepend(icon('filter'));bar.append(filters);
     if(state.entity==='Transactions'){const edit=button('Edit',()=>{for(const row of state.pageResult?.rows||[])inlineRows.add(row.id);paintInlineRows();updateReviewFooter();});edit.id='edit-page';edit.disabled=reviewSaving||!!reviewJob;bar.append(edit);}
     bar.append(button('Add '+label(state.entity).toLowerCase(),()=>editRecord(state.entity)));
     if(state.entity==='Transactions')append(bar,button('Import CSV',showImport),button('Import reviewed package',showPackageImport),button('Type guide',showTypeGuide));
@@ -385,7 +385,6 @@ const intro=el('section','overview-intro');append(intro,el('h2','','Your finance
   function showTableFilters(){
     const values=structuredClone(state.filters),box=el('div','form-grid'),controls={},entity=state.entity;
     const add=(key,control)=>{control.setAttribute('aria-label',label(key));controls[key]=control;box.append(field(key,control));};
-    add('q',input(values.q||'','search'));controls.q.setAttribute('aria-label','Search');
     const columns=displays[entity]||[],accountEntities=['Transactions','Statements','BankPayments','InstallmentPlans','Cards','Shares'];
     if(accountEntities.includes(entity))add('accountId',select(state.boot.lookups.Accounts||[],values.accountId||''));
     if(['Transactions','Cards','Shares','InstallmentPlans'].includes(entity)){add('cardId',select((state.boot.lookups.Cards||[]).filter(c=>!values.accountId||c.accountId===values.accountId),values.cardId||''));}
