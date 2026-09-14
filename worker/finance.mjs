@@ -3,7 +3,7 @@ import {createDomain} from './domain.generated.mjs';
 import {databaseRpc,DatabaseError} from './database.mjs';
 import {googleAction,runGoogleAutomation,backupSheet,backupDue} from './google.mjs';
 
-export const FINANCIAL_REVISION='billbills-20260914-10';
+export const FINANCIAL_REVISION='billbills-20260914-11';
 const readActions=new Set(['apiIdentity','apiBootstrap','apiList','apiImportLookups','apiPackageReceipt','apiInstallmentSchedule','apiReport','apiImportPreview','apiImportPage','apiImportStatus','apiSyncPreview','apiCalendars','apiCalendarTest','apiSyncStatus','apiExportDatabase','apiCalendarMigrationPreview']);
 const googleActions=new Set(['apiBackup','apiCalendarTest','apiCalendars','apiCreateCalendar','apiSync','apiSyncPreview','apiCalendarMigrationPreview','apiCalendarMigrate','apiActivateIntegrations','apiEnableSheetBackups']);
 const explicitIds={apiSave:3,apiSettings:2,apiPackageCommit:1,apiResolveMissing:3,apiImportCommit:4,apiCalendarMigrate:2};
