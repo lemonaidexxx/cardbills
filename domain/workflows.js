@@ -242,12 +242,12 @@ function billsReviewBatchItems_(input) {
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['items','includeSummary'].includes(k))||!Array.isArray(input.items)||input.items.length<1||input.items.length>10||typeof input.includeSummary!=='boolean')fail_('VALIDATION: Save a batch of 1 to 10 transaction classifications.');
   const seen=new Set();
   return input.items.map(item=>{
-    if(!item||typeof item!=='object'||Array.isArray(item)||Object.keys(item).some(k=>!['id','token','type','reviewStatus','tags'].includes(k))||typeof item.id!=='string'||!item.id||seen.has(item.id)||!/^[a-f0-9]{64}$/i.test(item.token||''))fail_('VALIDATION: Check the transaction identifiers and revisions.');
+    if(!item||typeof item!=='object'||Array.isArray(item)||Object.keys(item).some(k=>!['id','token','type','reviewStatus','tags','category','dueDate','notes'].includes(k))||typeof item.id!=='string'||!item.id||seen.has(item.id)||!/^[a-f0-9]{64}$/i.test(item.token||''))fail_('VALIDATION: Check the transaction identifiers and revisions.');
     seen.add(item.id);
     if(!CC_ENUMS['Transactions.type'].includes(item.type)||!CC_ENUMS['Transactions.reviewStatus'].includes(item.reviewStatus)||typeof item.tags!=='string')fail_('VALIDATION: Choose a transaction type, review status and tags.');
     const tags=[...new Map(item.tags.split(',').map(t=>t.trim()).filter(Boolean).map(t=>[t.toLowerCase(),t])).values()];
     if(tags.length>30||tags.some(t=>t.length>60||/[\r\n\x00-\x1f]/.test(t)))fail_('VALIDATION: Choose up to 30 tags of 60 characters each.');
-    return {id:item.id,token:item.token,type:item.type,reviewStatus:item.reviewStatus,tags:tags.join(', ')};
+    const extra={};for(const key of ['category','dueDate','notes'])if(Object.prototype.hasOwnProperty.call(item,key)){if(typeof item[key]!=='string')fail_('VALIDATION: Invalid '+key);extra[key]=item[key];}return {id:item.id,token:item.token,type:item.type,reviewStatus:item.reviewStatus,tags:tags.join(', '),...extra};
   });
 }
 
@@ -266,7 +266,7 @@ function billsSaveReviewBatch_(input,requestId) {
     if(prior){
       if(prior.kind!=='TRANSACTION_REVIEW_BATCH')fail_('CONFLICT: This save identifier belongs to another action.');
       const changes=JSON.parse(prior.payload).filter(c=>c.entity==='Transactions');
-      if(changes.length!==items.length||items.some(item=>!changes.some(c=>c.before&&c.after.id===item.id&&token_(c.before)===item.token&&c.after.type===item.type&&c.after.reviewStatus===item.reviewStatus&&c.after.tags===item.tags)))fail_('CONFLICT: Retry the original batch without changing its selections.');
+      if(changes.length!==items.length||items.some(item=>!changes.some(c=>c.before&&c.after.id===item.id&&token_(c.before)===item.token&&c.after.type===item.type&&c.after.reviewStatus===item.reviewStatus&&c.after.tags===item.tags&&['category','dueDate','notes'].every(k=>!(k in item)||c.after[k]===item[k]))))fail_('CONFLICT: Retry the original batch without changing its selections.');
       if(prior.state!=='DONE')fail_('RECOVERY: Resume the pending operation, then retry Save changes.');
       return billsReviewBatchResult_(db,items,input.includeSummary,true);
     }
@@ -275,7 +275,7 @@ function billsSaveReviewBatch_(input,requestId) {
     for(const item of items){
       const before=byId.get(item.id);
       if(!before||token_(before)!==item.token)fail_('CONFLICT: A transaction changed. Keep or discard your pending selections, refresh the records, and review the changed transaction.');
-      const after=prepare_('Transactions',{type:item.type,reviewStatus:item.reviewStatus,tags:item.tags},before);
+      const {id,token,...patch}=item;const after=prepare_('Transactions',patch,before);
       changes.push({entity:'Transactions',before,after});
       for(const name of item.tags.split(',').map(t=>t.trim()).filter(Boolean)){
         const key='field.tag.'+hash_(name.toLowerCase()).slice(0,24);

@@ -1122,11 +1122,14 @@ function filtered_(e,db,f,sort) {
 
     if(f.tag&&!String(t.tags||'').split(',').map(x=>x.trim().toLowerCase()).includes(f.tag.toLowerCase()))return false;
 
-    if(['status','requestStatus','settlement','expectedState','currency','accountId','cardId','statementId','transactionId','shareId','type','installmentPlanId'].some(k=>f[k]&&String(r[k]||t[k]||'')!==f[k]))return false;
+    if(f.category&&String(t.category||'').toLowerCase()!==f.category.toLowerCase())return false;
+    if(Array.isArray(f.type)&&f.type.length&&!f.type.includes(t.type))return false;
+    if(f.recordId&&r.id!==f.recordId)return false;
+    if(['status','requestStatus','settlement','expectedState','currency','accountId','cardId','statementId','transactionId','shareId','type','installmentPlanId'].some(k=>f[k]&&!Array.isArray(f[k])&&String(r[k]||t[k]||'')!==f[k]))return false;
 
     const date=r[basis]||t[basis]||'';return !((f.from&&date<f.from)||(f.to&&date>f.to));
 
-  }).sort((a,b)=>{const value=r=>parts[0]==='cardId'?(db.Cards.find(c=>c.id===r.cardId)?.nickname||''):parts[0]==='accountId'?(db.Accounts.find(c=>c.id===r.accountId)?.nickname||''):r[parts[0]];const x=value(a),y=value(b),empty=v=>v===''||v==null;if(empty(x)!==empty(y))return empty(x)?1:-1;const c=/Minor$/.test(parts[0])&&!empty(x)?Number(x)-Number(y):typeof x==='number'&&typeof y==='number'?x-y:String(x??'').localeCompare(String(y??''));return (parts[1]==='asc'?1:-1)*c||a.id.localeCompare(b.id);});
+  }).sort((a,b)=>{const value=r=>parts[0]==='cardId'?(db.Cards.find(c=>c.id===r.cardId)?.nickname||''):parts[0]==='accountId'?(db.Accounts.find(c=>c.id===r.accountId)?.nickname||''):parts[0]==='personId'?(db.People.find(c=>c.id===r.personId)?.name||''):parts[0]==='transactionId'?(db.Transactions.find(c=>c.id===r.transactionId)?.description||''):parts[0]==='statementId'?(db.Statements.find(c=>c.id===r.statementId)?.statementDate||''):parts[0]==='paymentId'?(db.BankPayments.find(c=>c.id===r.paymentId)?.reference||''):parts[0]==='shareId'?(db.Transactions.find(t=>t.id===db.Shares.find(c=>c.id===r.shareId)?.transactionId)?.description||''):r[parts[0]];const x=value(a),y=value(b),empty=v=>v===''||v==null;if(empty(x)!==empty(y))return empty(x)?1:-1;const c=/Minor$|^count$|^postedCount$/.test(parts[0])&&!empty(x)?Number(x)-Number(y):typeof x==='number'&&typeof y==='number'?x-y:String(x??'').localeCompare(String(y??''));return (parts[1]==='asc'?1:-1)*c||a.id.localeCompare(b.id);});
 
 }
 

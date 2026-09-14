@@ -21,3 +21,10 @@ test('obsolete queued reads are skipped and failures release the queue',async()=
 });
 
 test('due countdown uses calendar dates and distinguishes unpaid overdue dates',()=>{const c=vm.createContext({});vm.runInContext(source,c);assert.equal(c.statementDueLabel('2027-01-01','2026-12-31'),'Due in 1 day');assert.equal(c.statementDueLabel('2026-03-01','2026-02-27'),'Due in 2 days');assert.equal(c.statementDueLabel('2026-09-14','2026-09-14'),'Due today');assert.equal(c.statementDueLabel('2026-09-13','2026-09-14'),'Past due');});
+
+ test('bulk drafts preserve untouched fields and prior edits until acknowledged',()=>{
+ const c=vm.createContext({});vm.runInContext(source,c);const drafts=c.createTransactionDrafts(),row={id:'a',_token:'original',type:'PURCHASE',reviewStatus:'REVIEW',tags:'Travel',category:'Food',dueDate:'2026-10-01',notes:'Original'};
+ drafts.track(row);drafts.stage(row,{type:'FEE'});drafts.stage(row,{dueDate:'',notes:'Updated'});
+ const item=drafts.batches()[0][0];assert.equal(item.type,'FEE');assert.equal(item.category,'Food');assert.equal(item.tags,'Travel');assert.equal(item.dueDate,'');assert.equal(item.notes,'Updated');assert.equal(item.token,'original');assert.equal(row.notes,'Original');
+ drafts.accept([{...row,notes:'Updated',_token:'saved'}]);assert.equal(drafts.size(),0);assert.equal(row.notes,'Updated');
+ });

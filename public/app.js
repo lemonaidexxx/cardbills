@@ -61,7 +61,7 @@ function createRecordClient(send, options = {}) {
 function createTransactionDrafts() {
   const drafts = new Map();
   const references = new Map();
-  const fields = row => ({ type: row.type, reviewStatus: row.reviewStatus, tags: String(row.tags || '') });
+  const fields = row => ({ type: row.type, reviewStatus: row.reviewStatus, tags: String(row.tags || ''), category: String(row.category || ''), dueDate: String(row.dueDate || ''), notes: String(row.notes || '') });
   function track(row) {
     if (!references.has(row.id)) references.set(row.id, new Set());
     references.get(row.id).add(row);
@@ -69,7 +69,7 @@ function createTransactionDrafts() {
   }
   function stage(row, value) {
     const original = drafts.get(row.id)?.original || JSON.parse(JSON.stringify(row));
-    const next = fields(value);
+    const next = fields({...track(row), ...value});
     if (JSON.stringify(next) === JSON.stringify(fields(original))) drafts.delete(row.id);
     else drafts.set(row.id, { original, value: next });
   }
@@ -107,7 +107,7 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
   const label=k=>configured('field.'+k,labels[k]||k.replace(/([A-Z])/g,' $1').trim().replace(/^./,s=>s.toUpperCase()));
   const refs={accountId:'Accounts',cardId:'Cards',statementId:'Statements',paymentId:'BankPayments',transactionId:'Transactions',personId:'People',shareId:'Shares',installmentPlanId:'InstallmentPlans',replacesCardId:'Cards',originTransactionId:'Transactions',matchedTransactionId:'Transactions'};
   const technical=new Set(['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','sourceKey','sourceRef']);
-  const displays={Labels:['key','value'],ReportConfig:['key','value'],Accounts:['nickname','bank','currency','status'],Cards:['nickname','accountId','lastFour','relationship','status'],Transactions:['description','cardId','transactionDate','dueDate','amountMinor','currency','type','reviewStatus','reviewAction'],Statements:['accountId','statementDate','dueDate','balanceMinor','paidMinor','remainingMinor','settlement','calendarMode'],BankPayments:['accountId','date','amountMinor','currency','status'],PaymentAllocations:['paymentId','statementId','amountMinor','status'],People:['name','contact','status'],Shares:['personId','transactionId','amountMinor','remainingMinor','requestStatus','settlement'],Repayments:['shareId','date','amountMinor','currency','type','status'],InstallmentPlans:['reference','accountId','count','postedCount','status'],SavedViews:['name','scope','status']};
+  const displays={Labels:['key','value'],ReportConfig:['key','value'],Accounts:['nickname','bank','currency','status'],Cards:['nickname','accountId','lastFour','relationship','status'],Transactions:['description','cardId','transactionDate','dueDate','amountMinor','currency','type','reviewStatus','category','tags','notes'],Statements:['accountId','statementDate','dueDate','balanceMinor','paidMinor','remainingMinor','settlement','calendarMode'],BankPayments:['accountId','date','amountMinor','currency','status'],PaymentAllocations:['paymentId','statementId','amountMinor','status'],People:['name','contact','status'],Shares:['personId','transactionId','amountMinor','remainingMinor','requestStatus','settlement'],Repayments:['shareId','date','amountMinor','currency','type','status'],InstallmentPlans:['reference','accountId','count','postedCount','status'],SavedViews:['name','scope','status']};
   const dateBases={Transactions:['transactionDate','postingDate','dueDate'],Statements:['statementDate','dueDate'],Shares:['transactionDate','expectedDate','requestDate'],BankPayments:['date'],Repayments:['date']};
   const navigationDescriptions={Overview:'Activity, statements and personal collections, each with its own ledger.',Transactions:'Review activity, add tags and assign purchases to people.',Statements:'Official balances, billing dates and confirmed allocations.','Money Owed':'Track requests, partial repayments and agreed credits independently.','Settings and Integration':'Manage configuration, Calendar reminders and recovery.'};
   const typeGuide={
@@ -124,7 +124,7 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
     FINANCED_PRINCIPAL:['Financed principal','Original purchase converted into an installment plan.','Tracked separately; monthly installment charges represent spending.'],
     UNKNOWN:['Needs classification','Use while the purpose of an entry is still uncertain.','Included in the review count until a type is selected.']
   };
-  const iconPaths={
+  const iconPaths={filter:'M3 4h18l-7 8v7l-4 2v-9z',
     Overview:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
     Transactions:'M5 4h14v16H5z M8 8h8 M8 12h8 M8 16h5',
     'Cards and Accounts':'M3 5h18v14H3z M3 9h18 M6 15h4',
@@ -178,7 +178,9 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
       binding.box.querySelectorAll('button,input,select').forEach(node=>node.disabled=reviewSaving||!!reviewJob);
     }
   }
+  const inlineRows=new Set();const inlineFields=['type','reviewStatus','category','tags','dueDate','notes'];
   function updateReviewFooter(){
+    updateInlineState();
     const bar=$('review-save-bar');if(!bar)return;
     const count=transactionDrafts.size();
     bar.hidden=state.area!=='Transactions'&&!count&&!reviewSaving;
@@ -189,7 +191,7 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
     $('review-save-status').hidden=!reviewMessage;
     $('save-review-changes').textContent=reviewSaving?'Saving...':reviewJob?'Retry save':'Save changes';
     $('save-review-changes').disabled=reviewSaving||!count;
-    $('discard-review-changes').disabled=reviewSaving||!count;
+    $('discard-review-changes').disabled=reviewSaving||(!count&&!inlineRows.size);
     updateReviewControls();
   }
   function transactionControls(r){
@@ -206,21 +208,23 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
     return box;
   }
   function applyReviewRows(rows){
-    transactionDrafts.accept(rows);
+    const savedScroll=window.scrollY,mainScroll=$('main').scrollTop;let returnFocus=null;
+    transactionDrafts.accept(rows);rows.forEach(r=>inlineRows.delete(r.id));
     for(const row of rows){
       for(const list of [state.pageResult?.rows,state.boot?.overview?.recent,state.boot?.lookups?.Transactions])for(const existing of list||[])if(existing.id===row.id)Object.assign(existing,row);
       if(state.selected?.id===row.id)Object.assign(state.selected,row);
     }
     document.querySelectorAll('[data-review-id]').forEach(box=>{
       const row=rows.find(r=>r.id===box.dataset.reviewId),tr=box.closest('tr');
-      if(row&&tr){tr.querySelector('[data-field=type]')?.replaceChildren(el('span','badge',row.type));tr.querySelector('[data-field=reviewStatus]')?.replaceChildren(el('span','badge',row.reviewStatus));}
+      if(row&&tr){const expanded=box.closest('details');if(expanded?.open){if(expanded.contains(document.activeElement)||document.activeElement===$('save-review-changes'))returnFocus=returnFocus||expanded.querySelector('summary');expanded.open=false;}tr.querySelector('[data-field=dueDate]')?.replaceChildren(document.createTextNode(row.dueDate||'�'));tr.querySelector('[data-field=type]')?.replaceChildren(el('span','badge',row.type));tr.querySelector('[data-field=reviewStatus]')?.replaceChildren(el('span','badge',row.reviewStatus));}
     });
+    paintInlineRows();if(!returnFocus&&document.activeElement===$('save-review-changes'))returnFocus=$('edit-page');returnFocus?.focus({preventScroll:true});$('main').scrollTop=mainScroll;window.scrollTo(0,savedScroll);
   }
   async function saveReviewChanges(){
     if(reviewSaving||!transactionDrafts.size())return;
     if(!state.boot.reviewBatchRevision){reviewMessage='The connected backend does not support batch saving yet. Refresh after the application update. Your selections remain pending.';updateReviewFooter();return;}
     if(!reviewJob)reviewJob={groups:transactionDrafts.batches().map(items=>({items,id:uuid()})),cursor:0,total:transactionDrafts.size(),saved:0};
-    reviewSaving=true;reviewMessage='Saving pending classifications...';updateReviewFooter();
+    reviewSaving=true;reviewMessage='Saving pending changes...';updateReviewFooter();
     try{
       while(reviewJob.cursor<reviewJob.groups.length){
         const group=reviewJob.groups[reviewJob.cursor],last=reviewJob.cursor===reviewJob.groups.length-1;
@@ -241,9 +245,9 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
   function setupReviewFooter(){
     $('save-review-changes').addEventListener('click',saveReviewChanges);
     $('discard-review-changes').addEventListener('click',()=>{
-      if(reviewSaving||!transactionDrafts.size())return;
+      if(reviewSaving)return;if(!transactionDrafts.size()){inlineRows.clear();paintInlineRows();updateReviewFooter();return;}
       if(!confirm('Discard pending transaction selections? Earlier successful saves remain recorded.'))return;
-      const uncertain=!!reviewJob;transactionDrafts.clear();reviewJob=null;reviewMessage='Pending selections discarded.';updateReviewFooter();
+      const uncertain=!!reviewJob;transactionDrafts.clear();inlineRows.clear();paintInlineRows();reviewJob=null;reviewMessage='Pending selections discarded.';updateReviewFooter();
       if(uncertain)action(refresh);
     });
     window.addEventListener('beforeunload',event=>{if(transactionDrafts.size()){event.preventDefault();event.returnValue='';}});
@@ -340,7 +344,7 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
     const listView=!['Overview','Review','Settings and Integration'].includes(state.area);
     let result=prefetched;
     if(listView){try{result=result||await recordClient('apiList',[state.entity,{...state.filters},state.page,state.sort],()=>seq===state.sequence);if(seq!==state.sequence)return;}catch(e){if(seq===state.sequence)notice(e.message,'error');return;}}
-    $('content').replaceChildren();renderContext();renderedView=view;
+    inlineRows.clear();$('content').replaceChildren();renderContext();renderedView=view;
     if(state.area==='Overview'){renderOverview();return;}
     if(state.area==='Review'){renderReview();return;}
     if(state.area==='Settings and Integration'){renderSettings();return;}
@@ -368,46 +372,58 @@ const intro=el('section','overview-intro');append(intro,el('h2','','Your finance
     if(!o.upcoming.length)c.append(el('p','subtle','No upcoming statements recorded.'));
     const note=el('div','context-note');append(note,el('strong','','Data freshness'),el('p','',o.freshness?'Latest recorded activity date: '+o.freshness:'No transactions imported.'),el('p','','Bank payments and personal repayments have separate histories.'));c.append(note);
   }
-  function renderToolbar(){const c=$('content'),tabs=areas[state.area];if(tabs.length>1){const t=el('div','section-tabs');tabs.forEach(e=>t.append(button(label(e),()=>{state.entity=e;state.filters={};state.page=0;render();},e===state.entity?'active':'')));c.append(t);}
-    const bar=el('div','toolbar'),search=input(state.filters.q||'','search');search.placeholder='Descriptions, names and notes';search.addEventListener('change',()=>{state.filters.q=search.value;state.page=0;render();});bar.append(field('Search',search));
+  function renderToolbar(){
+    const c=$('content'),tabs=areas[state.area];if(tabs.length>1){const t=el('div','section-tabs');tabs.forEach(e=>t.append(button(label(e),()=>{state.entity=e;state.filters={};state.page=0;render();},e===state.entity?'active':'')));c.append(t);}
+    const bar=el('div','toolbar');const filters=button('Filters',showTableFilters);filters.prepend(icon('filter'));bar.append(filters);
+    if(state.entity==='Transactions'){const edit=button('Edit',()=>{for(const row of state.pageResult?.rows||[])inlineRows.add(row.id);paintInlineRows();updateReviewFooter();});edit.id='edit-page';edit.disabled=reviewSaving||!!reviewJob;bar.append(edit);}
     bar.append(button('Add '+label(state.entity).toLowerCase(),()=>editRecord(state.entity)));
-    if(state.entity==='Transactions'){bar.append(button('Import CSV',showImport));bar.append(button('Import reviewed package',showPackageImport));bar.append(button('Type guide',showTypeGuide));}
+    if(state.entity==='Transactions')append(bar,button('Import CSV',showImport),button('Import reviewed package',showPackageImport),button('Type guide',showTypeGuide));
     if(state.entity==='Shares')bar.append(button('Preview report',showReport));
-    if(state.entity==='Statements'&&state.boot.storage!=='supabase')bar.append(button('Synchronize statement events',synchronizeStatements));
-    if(['Transactions','Statements','BankPayments','InstallmentPlans','Cards'].includes(state.entity)){
-      const account=select([{id:'',label:'All accounts'},...(state.boot.lookups.Accounts||[])],state.filters.accountId||'',false);
-      account.setAttribute('aria-label','Account');account.addEventListener('change',()=>{state.filters.accountId=account.value;delete state.filters.statementDate;delete state.filters.statementId;if(!(state.boot.lookups.Cards||[]).some(c=>c.id===state.filters.cardId&&(!account.value||c.accountId===account.value)))delete state.filters.cardId;state.page=0;render();});bar.append(field('Account',account));
-      if(['Transactions','Statements'].includes(state.entity)){
-        const dates=[...new Set((state.boot.lookups.Statements||[]).filter(s=>!state.filters.accountId||s.accountId===state.filters.accountId).map(s=>s.statementDate).filter(Boolean))].sort().reverse();
-        const date=select([{id:'',label:'All statement dates'},...dates.map(d=>({id:d,label:d}))],state.filters.statementDate||'',false);
-        date.setAttribute('aria-label','Statement date');date.addEventListener('change',()=>{state.filters.statementDate=date.value;state.page=0;render();});bar.append(field('Statement date',date));
-      }
-    }
-    if(state.entity==='Transactions'){
-      const card=select([{id:'',label:'All cards'},...(state.boot.lookups.Cards||[]).filter(c=>!state.filters.accountId||c.accountId===state.filters.accountId)],state.filters.cardId||'',false);card.setAttribute('aria-label','Card');card.addEventListener('change',()=>{state.filters.cardId=card.value;state.page=0;render();});bar.insertBefore(field('Card',card),bar.querySelector('[name="Account"]')?.closest('label')||null);
-      const actions=el('div','toolbar transaction-actions');[...bar.querySelectorAll(':scope > button')].forEach(b=>actions.append(b));
-      c.append(bar);const chips=el('div','toolbar');Object.entries(state.filters).filter(([k,v])=>v&&!['q','cardId','accountId','statementDate'].includes(k)).forEach(([k,v])=>chips.append(button(label(k)+': '+(refs[k]?lookup(refs[k],v):v)+' ×',()=>{delete state.filters[k];state.page=0;render();})));
-      if(Object.values(state.filters).some(Boolean)||state.sort!=='transactionDate:desc')chips.append(button('Reset view',()=>{state.filters={};state.sort='transactionDate:desc';state.page=0;render();}));c.append(chips,actions);return;
-    }
-    c.append(bar);
-    const more=el('details');more.open=Object.keys(state.filters).some(k=>k!=='q'&&state.filters[k]);more.append(el('summary','','Filters and sorting'));
-    const f=el('div','filters');
-    const choices={type:typeOptions(),tag:(state.boot.tagOptions||[]),currency:Object.keys(state.boot.currencies),status:state.boot.enums[state.entity+'.status']||[],requestStatus:state.boot.enums['Shares.requestStatus'],settlement:['OPEN','PARTIAL','SETTLED','UNKNOWN'],expectedState:['PAST_EXPECTED_DATE','NOT_PAST_EXPECTED_DATE']};
-    const filterFields=['currency','status'];if(state.entity==='Transactions')filterFields.push('type');if(['Transactions','Shares'].includes(state.entity))filterFields.push('personId','tag');if(state.entity==='Shares')filterFields.push('requestStatus','settlement','expectedState');if(state.entity==='Statements')filterFields.push('settlement');
-    filterFields.forEach(k=>{const n=k==='personId'?select(state.boot.lookups.People,state.filters[k]):choices[k]?select(choices[k],state.filters[k]):input(state.filters[k]||'');n.addEventListener('change',()=>{state.filters[k]=n.value;state.page=0;render();});f.append(field(k,n));});
-    if(dateBases[state.entity]){const n=select(dateBases[state.entity],state.filters.dateBasis||dateBases[state.entity][0],false);n.addEventListener('change',()=>{state.filters.dateBasis=n.value;state.page=0;render();});f.append(field('dateBasis',n));['from','to'].forEach(k=>{const n=input(state.filters[k]||'','date');n.addEventListener('change',()=>{state.filters[k]=n.value;state.page=0;render();});f.append(field(k,n));});}
-    const sort=select((displays[state.entity]||[]).flatMap(k=>[{id:k+':asc',label:label(k)+' ascending'},{id:k+':desc',label:label(k)+' descending'}]).concat([{id:'updatedAt:desc',label:'Recently updated'}]),state.sort,false);sort.addEventListener('change',()=>{state.sort=sort.value;render();});f.append(field('Sort',sort));
-    append(more,f,button('Clear filters',()=>{state.filters={};state.page=0;render();}),['Transactions','Shares','Statements','BankPayments','Repayments'].includes(state.entity)?button('Save this view',()=>editRecord('SavedViews',{name:'',scope:state.entity,filters:JSON.stringify(state.filters),sort:state.sort,status:'ACTIVE'})):null);c.append(more);
+    if(['Transactions','Shares','Statements','BankPayments','Repayments'].includes(state.entity))bar.append(button('Save this view',()=>editRecord('SavedViews',{name:'',scope:state.entity,filters:JSON.stringify(state.filters),sort:state.sort,status:'ACTIVE'})));
+    c.append(bar);const chips=el('div','toolbar');for(const [key,value]of Object.entries(state.filters)){if(!value||Array.isArray(value)&&!value.length)continue;chips.append(button(label(key)+': '+(refs[key]?lookup(refs[key],value):Array.isArray(value)?value.map(v=>key==='type'?(typeGuide[v]?.[0]||v):v).join(', '):value)+' x',()=>{delete state.filters[key];state.page=0;render();}));}if(chips.childNodes.length)chips.append(button('Clear filters',()=>{state.filters={};state.page=0;render();}));c.append(chips);
   }
-  function simpleTable(container,entity,rows){if(!rows.length){container.append(el('div','empty','No records to display.'));return;}const wrap=el('div','table-scroll');wrap.tabIndex=0;wrap.setAttribute('aria-label',label(entity)+' table');const table=el('table'),thead=el('thead'),tr=el('tr');(displays[entity]||[]).forEach(k=>{const th=el('th');th.scope='col';if(entity==='Transactions'&&state.area==='Transactions'&&k!=='reviewAction'){const active=state.sort.split(':');th.setAttribute('aria-sort',active[0]===k?(active[1]==='asc'?'ascending':'descending'):'none');const sortButton=button(label(k)+(active[0]===k?(active[1]==='asc'?' ↑':' ↓'):''),()=>{const currentSort=state.sort.split(':');state.sort=k+':'+(currentSort[0]===k&&currentSort[1]==='asc'?'desc':'asc');state.page=0;render();},'table-sort');sortButton.dataset.sortKey=k;th.append(sortButton);}else th.textContent=label(k);tr.append(th);});thead.append(tr);table.append(thead);const body=el('tbody');rows.forEach(r=>{const row=el('tr');displays[entity].forEach((k,i)=>{const td=el('td');td.dataset.field=k;if(i===0)td.append(button(display(r,k),()=>showDetails(entity,r),''));else if(entity==='Transactions'&&k==='reviewAction'){const d=el('details','row-review');d.append(el('summary','','Review / classify'),transactionControls(r));td.append(d);}else if(entity==='Statements'&&k==='settlement')td.append(statementPaymentPicker(r));else if(/status|settlement|reviewStatus/.test(k))td.append(el('span','badge',display(r,k)));else td.textContent=display(r,k);row.append(td);});body.append(row);});table.append(body);wrap.append(table);container.append(wrap);}
+  function showTableFilters(){
+    const values=structuredClone(state.filters),box=el('div','form-grid'),controls={},entity=state.entity;
+    const add=(key,control)=>{control.setAttribute('aria-label',label(key));controls[key]=control;box.append(field(key,control));};
+    add('q',input(values.q||'','search'));controls.q.setAttribute('aria-label','Search');
+    const columns=displays[entity]||[],accountEntities=['Transactions','Statements','BankPayments','InstallmentPlans','Cards','Shares'];
+    if(accountEntities.includes(entity))add('accountId',select(state.boot.lookups.Accounts||[],values.accountId||''));
+    if(['Transactions','Cards','Shares','InstallmentPlans'].includes(entity)){add('cardId',select((state.boot.lookups.Cards||[]).filter(c=>!values.accountId||c.accountId===values.accountId),values.cardId||''));}
+    if(['Transactions','Statements'].includes(entity))add('statementDate',select([...new Set((state.boot.lookups.Statements||[]).filter(r=>!values.accountId||r.accountId===values.accountId).map(r=>r.statementDate).filter(Boolean))].sort().reverse(),values.statementDate||''));
+    if(controls.accountId)controls.accountId.addEventListener('change',()=>{const account=controls.accountId.value;if(controls.cardId){const cards=(state.boot.lookups.Cards||[]).filter(c=>!account||c.accountId===account),old=controls.cardId.value;controls.cardId.replaceChildren(...select(cards,cards.some(c=>c.id===old)?old:'').childNodes);}if(controls.statementDate)controls.statementDate.replaceChildren(...select([...new Set((state.boot.lookups.Statements||[]).filter(r=>!account||r.accountId===account).map(r=>r.statementDate).filter(Boolean))].sort().reverse(),'').childNodes);});
+    if(entity==='Transactions'){const types=select(typeOptions(),'',false);types.multiple=true;types.size=5;const chosen=Array.isArray(values.type)?values.type:values.type?[values.type]:[];for(const option of types.options)option.selected=chosen.includes(option.value);add('type',types);add('reviewStatus',select(state.boot.enums['Transactions.reviewStatus'],values.reviewStatus||''));add('category',input(values.category||''));}
+    if(['Transactions','Shares'].includes(entity)){add('tag',select(state.boot.tagOptions||[],values.tag||''));add('personId',select(state.boot.lookups.People||[],values.personId||''));}
+    if(columns.includes('currency'))add('currency',select(Object.keys(state.boot.currencies),values.currency||''));
+    if(state.boot.enums[entity+'.status'])add('status',select(state.boot.enums[entity+'.status'],values.status||''));
+    if(entity==='Shares'){add('requestStatus',select(state.boot.enums['Shares.requestStatus'],values.requestStatus||''));add('expectedState',select(['PAST_EXPECTED_DATE','NOT_PAST_EXPECTED_DATE'],values.expectedState||''));}
+    if(['Shares','Statements'].includes(entity))add('settlement',select(['OPEN','PARTIAL','SETTLED','UNKNOWN'],values.settlement||''));
+    if(dateBases[entity]){add('dateBasis',select(dateBases[entity],values.dateBasis||dateBases[entity][0],false));add('from',input(values.from||'','date'));add('to',input(values.to||'','date'));}
+    const apply=button('Apply filters',()=>{for(const [key,control]of Object.entries(controls)){const value=control.multiple?[...control.selectedOptions].map(o=>o.value):control.value;if(!value||Array.isArray(value)&&!value.length)delete values[key];else values[key]=value;}state.filters=values;state.page=0;$('dialog').close();render();},'primary');box.append(apply);openDialog('Filters',box);
+  }
+  function updateInlineState(){const edit=$('edit-page');if(edit)edit.disabled=reviewSaving||!!reviewJob;document.querySelectorAll('[data-inline-field]').forEach(n=>n.disabled=reviewSaving||!!reviewJob);}
+  function inlineCell(td,row,key){td.replaceChildren();if(!inlineRows.has(row.id)&&!transactionDrafts.has(row.id)){td.textContent=display(row,key);return;}const value=transactionDrafts.track(row)[key],control=key==='type'?select(typeOptions(),value,false):key==='reviewStatus'?select(state.boot.enums['Transactions.reviewStatus'].map(id=>({id,label:id==='REVIEW'?'Needs verification':id==='VERIFIED'?'Verified':'Check possible duplicate'})),value,false):input(value,key==='dueDate'?'date':'text');control.dataset.inlineField=key;control.setAttribute('aria-label',label(key)+' for '+row.description);control.disabled=reviewSaving||!!reviewJob;control.addEventListener('change',()=>{transactionDrafts.stage(row,{[key]:control.value});reviewMessage='';updateReviewFooter();});td.append(control);}
+  function paintInlineRows(){for(const tr of document.querySelectorAll('[data-transaction-row]')){const row=state.pageResult?.rows.find(r=>r.id===tr.dataset.transactionRow);if(row)for(const key of inlineFields){const cell=tr.querySelector('[data-field="'+key+'"]');if(cell)inlineCell(cell,row,key);}}}
+  function simpleTable(container,entity,rows){
+    if(!rows.length){container.append(el('div','empty','No records to display.'));return;}
+    const wrap=el('div','table-scroll');wrap.tabIndex=0;wrap.setAttribute('aria-label',label(entity)+' table');const table=el('table'),head=el('thead'),tr=el('tr'),columns=displays[entity]||[],list=state.entity===entity&&!['Overview','Review'].includes(state.area);
+    for(const key of columns){const th=el('th');th.scope='col';if(list){const active=state.sort.split(':');th.setAttribute('aria-sort',active[0]===key?(active[1]==='asc'?'ascending':'descending'):'none');const sort=button(label(key)+(active[0]===key?(active[1]==='asc'?' \u2191':' \u2193'):''),()=>{const current=state.sort.split(':');state.sort=key+':'+(current[0]===key&&current[1]==='asc'?'desc':'asc');state.page=0;render();},'table-sort');sort.dataset.sortKey=key;th.append(sort);}else th.textContent=label(key);tr.append(th);}head.append(tr);table.append(head);const body=el('tbody');
+    for(const row of rows){const tr=el('tr');if(entity==='Transactions'&&list)tr.dataset.transactionRow=row.id;columns.forEach((key,index)=>{const td=el('td');td.dataset.field=key;if(entity==='Transactions'&&list&&inlineFields.includes(key))inlineCell(td,row,key);else if(index===0)td.append(button(display(row,key),()=>showDetails(entity,row),''));else if(entity==='Statements'&&key==='settlement')td.append(statementPaymentPicker(row));else td.textContent=display(row,key);tr.append(td);});body.append(tr);}table.append(body);wrap.append(table);container.append(wrap);
+  }
   function renderTable(container,result){state.pageResult=result;state.pageEntity=state.entity;if(result.issues.some(x=>x.severity==='ERROR'))container.append(el('div','review-banner','This table contains invalid records. Treat calculated values as provisional until repaired.'));
     if(result.summary){Object.entries(result.summary).forEach(([cur,t])=>{const panel=el('section','card');panel.append(el('h2','','Collections · '+cur));const metrics=el('div','metrics');[['Assigned',t.assigned],['Cash received',t.cash],['Credits / waivers',t.credits],['Remaining owed',t.remaining]].forEach(([name,n])=>{const d=el('div','metric');append(d,el('span','',name),el('strong','',money(n,cur)));metrics.append(d);});panel.append(metrics);const counts=el('div','toolbar');[['Not requested',t.notRequested,{requestStatus:'NOT_REQUESTED'}],['Partially settled',t.partial,{settlement:'PARTIAL'}],['Settled',t.settled,{settlement:'SETTLED'}],['Disputed',t.disputed,{requestStatus:'DISPUTED'}],['Past expected date',t.pastExpected,{expectedState:'PAST_EXPECTED_DATE'}]].forEach(([name,n,f])=>counts.append(button(name+' ('+n+')',()=>{state.filters=Object.assign({},state.filters,f,{currency:cur});state.page=0;render();})));append(panel,el('p','subtle','Active shares within the current filters. Request status and settlement are independent.'),counts);container.append(panel);});}
     simpleTable(container,state.entity,result.rows);const pager=el('div','pager');pager.append(el('span','',result.total+' records · page '+(result.page+1)+' of '+Math.max(1,Math.ceil(result.total/40))));const controls=el('div');const prev=button('Previous',()=>{state.page--;render();}),next=button('Next',()=>{state.page++;render();});prev.disabled=result.page===0;next.disabled=(result.page+1)*40>=result.total;append(controls,prev,next);pager.append(controls);container.append(pager);}
-  function showDetails(entity,r){state.selected=r;const c=$('context');c.replaceChildren();append(c,el('p','eyebrow','RECORD DETAILS'),el('h2','',label(entity)));const details=el('div','record-detail-grid');Object.keys(r).filter(k=>!k.startsWith('_')&&k!=='id'&&!technical.has(k)&&k!=='revision').forEach(k=>{const d=el('div','detail-row');if(['notes','originalDescription','description'].includes(k))d.classList.add('wide');append(d,el('span','',label(k)),el('strong','',k==='totals'?Object.entries(r.totals).map(([cur,n])=>money(n,cur)).join(', '):display(r,k)));details.append(d);});c.append(details);const technicalDetails=el('details');technicalDetails.append(el('summary','','Technical details'));Object.keys(r).filter(k=>k==='id'||k.endsWith('Id')||technical.has(k)).forEach(k=>technicalDetails.append(el('p','subtle',k+': '+(r[k]||'—'))));c.append(technicalDetails);c.append(button('Edit record',()=>editRecord(entity,r)));
+  function originalTransaction(container,share){
+    const section=el('section','card');section.append(el('h3','','Original transaction'));container.append(section);
+    const current=()=>state.selected===share&&section.isConnected;
+    if(!share.transactionId){section.append(el('p','','No original transaction is linked.'));return;}
+    recordClient('apiList',['Transactions',{recordId:share.transactionId},0,'updatedAt:desc'],current).then(result=>{if(!current()||!result)return;const transaction=result.rows[0];if(!transaction){section.append(el('p','','The original transaction is unavailable.'));return;}append(section,el('p','',transaction.description),el('p','',lookup('Cards',transaction.cardId)+' � '+lookup('Accounts',transaction.accountId)),el('p','',transaction.transactionDate+' � '+money(transaction.amountMinor,transaction.currency)));if(transaction.status==='VOID')section.append(el('p','','This transaction is voided.'));section.append(button('Open original transaction',()=>{showDetails('Transactions',transaction);const back=button('Back to Money owed',()=>{showDetails('Shares',share);const heading=$('context').querySelector('h2');heading.tabIndex=-1;heading.focus({preventScroll:true});});$('context').prepend(back);back.focus();}));}).catch(error=>{if(current())section.append(el('p','error',error.message));});
+  }
+  function showDetails(entity,r){state.selected=r;const c=$('context');c.replaceChildren();append(c,el('h2','',label(entity)));const details=el('div','record-detail-grid');Object.keys(r).filter(k=>!k.startsWith('_')&&k!=='id'&&!technical.has(k)&&k!=='revision').forEach(k=>{const d=el('div','detail-row');if(['notes','originalDescription','description'].includes(k))d.classList.add('wide');append(d,el('span','',label(k)),el('strong','',k==='totals'?Object.entries(r.totals).map(([cur,n])=>money(n,cur)).join(', '):display(r,k)));details.append(d);});c.append(details);const technicalDetails=el('details');technicalDetails.append(el('summary','','Technical details'));Object.keys(r).filter(k=>k==='id'||k.endsWith('Id')||technical.has(k)).forEach(k=>technicalDetails.append(el('p','subtle',k+': '+(r[k]||'—'))));c.append(technicalDetails);c.append(button('Edit record',()=>editRecord(entity,r)));
     if(entity==='Transactions')c.append(button('Link installment charges',()=>linkInstallments(r)));
     if(entity==='Transactions')c.append(button('Assign a share',()=>editRecord('Shares',{transactionId:r.id,currency:r.currency,status:'ACTIVE',requestStatus:'NOT_REQUESTED'})));
     if(entity==='Transactions'){const panel=el('section','card');append(panel,el('h3','','Classify and review'),transactionControls(r));c.append(panel);}
     if(entity==='Statements')c.append(statementPaymentPicker(r));
+    if(entity==='Shares')originalTransaction(c,r);
     if(entity==='Shares')c.append(button('Record repayment or credit',()=>editRecord('Repayments',{shareId:r.id,currency:r.currency,type:'CASH',status:'PENDING',date:state.boot.today})));
     if(entity==='Statements')c.append(button('Allocate bank payment',()=>editRecord('PaymentAllocations',{statementId:r.id,status:'ACTIVE'})));
     if(entity==='BankPayments')c.append(button('Allocate to statement',()=>editRecord('PaymentAllocations',{paymentId:r.id,status:'ACTIVE'})));
