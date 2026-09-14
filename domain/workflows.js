@@ -22,7 +22,7 @@ function billsBootstrap(view) {
     configuration.labels['app.title']='BillBills'; configuration.labels['app.subtitle']='';
     diagnostics.workflowRevision=BB_WORKFLOW_REVISION;diagnostics.reviewBatchRevision=BB_REVIEW_BATCH_REVISION;
     diagnostics.triggers=ScriptApp.getProjectTriggers().filter(t=>['onSheetEdit_','reconcile_','reconcileBillsBills_'].includes(t.getHandlerFunction())).map(t=>({handler:t.getHandlerFunction(),id:t.getUniqueId()}));
-    return {version:CC_VERSION,today:today_(db),schema:CC_SCHEMA,enums:CC_ENUMS,required:CC_REQUIRED,currencies:CC_CURRENCY,configuration,settings:clientSettings_(db),lookups:lookups_(db),overview:overview_(db,issues),issues:issues.slice(0,200),diagnostics,workflowRevision:BB_WORKFLOW_REVISION,reviewBatchRevision:BB_REVIEW_BATCH_REVISION,tagOptions:billsTagOptions_(db),paymentSources:billsPaymentSources_(db),currentPage:view&&view.entity?billsListView_(db,issues,view.entity,view.filters,view.page,view.sort):null};
+    return {version:CC_VERSION,today:today_(db),schema:CC_SCHEMA,enums:CC_ENUMS,required:CC_REQUIRED,currencies:CC_CURRENCY,configuration,settings:clientSettings_(db),lookups:lookups_(db),overview:{...overview_(db,issues),charts:billsCharts_(db,{})},issues:issues.slice(0,200),diagnostics,workflowRevision:BB_WORKFLOW_REVISION,reviewBatchRevision:BB_REVIEW_BATCH_REVISION,tagOptions:billsTagOptions_(db),paymentSources:billsPaymentSources_(db),currentPage:view&&view.entity?billsListView_(db,issues,view.entity,view.filters,view.page,view.sort):null};
   },true);
 }
 
@@ -36,7 +36,7 @@ function billsListView_(db,issues,entity,filters,page,sort) {
 }
 
 function billsList(entity,filters,page,sort) {
-  return guard_(()=>{const db=load_();if(entity==='DuplicateReview')return billsDuplicates_(db,page);return billsListView_(db,review_(db),entity,filters,page,sort);},true);
+  return guard_(()=>{const db=load_();if(entity==='OverviewCharts')return billsCharts_(db,filters||{});if(entity==='DuplicateReview')return billsDuplicates_(db,page);return billsListView_(db,review_(db),entity,filters,page,sort);},true);
 }
 
 function billsChanged_(db,changes,opId,kind) {
@@ -306,3 +306,12 @@ function billsResolveDuplicate_(input,requestId){return guard_(()=>{
  const allowed=['description','originalDescription','postingDate','dueDate','type','category','tags','notes','reviewStatus'];if(!input.fields||Array.isArray(input.fields)||Object.keys(input.fields).some(k=>!allowed.includes(k)))fail_('VALIDATION: Unsupported merge fields.');
  const after=prepare_('Transactions',input.fields,survivor),voided=prepare_('Transactions',{status:'VOID'},duplicate);billsChanged_(db,[{entity:'Transactions',before:survivor,after},{entity:'Transactions',before:duplicate,after:voided}],opId,kind);return billsResult_(load_(),'Transactions',survivor.id,false);
 },true);}
+
+function billsCharts_(db,filters){
+ const end=filters.endMonth||today_(db).slice(0,7);if(!/^\d{4}-\d{2}$/.test(end)||!dateValid_(end+'-01'))fail_('VALIDATION: Invalid chart month.');
+ const months=[];for(let i=11;i>=0;i--)months.push(new Date(Date.UTC(Number(end.slice(0,4)),Number(end.slice(5,7))-1-i,1)).toISOString().slice(0,7));
+ const currencies={};for(const currency of [...new Set(db.Accounts.map(a=>a.currency))])currencies[currency]={months:months.map(month=>({month,amountMinor:0})),cards:[],types:[],undatedCount:0};
+ const invalid=review_(db).some(i=>i.severity==='ERROR');if(invalid)return {endMonth:end,currencies,invalid};
+ for(const t of db.Transactions){if(t.status!=='ACTIVE'||!['PURCHASE','FEE','INTEREST','CASH_ADVANCE','INSTALLMENT'].includes(t.type))continue;const group=currencies[t.currency]||(currencies[t.currency]={months:months.map(month=>({month,amountMinor:0})),cards:[],types:[],undatedCount:0});if(!t.postingDate){group.undatedCount++;continue;}const month=group.months.find(m=>m.month===t.postingDate.slice(0,7));if(!month)continue;month.amountMinor=addMinor_(month.amountMinor,t.amountMinor);for(const [key,id]of [['cards',t.cardId||''],['types',t.type]]){let item=group[key].find(v=>v.id===id);if(!item){item={id,amountMinor:0};group[key].push(item);}item.amountMinor=addMinor_(item.amountMinor,t.amountMinor);}}
+ return {endMonth:end,currencies,invalid};
+}

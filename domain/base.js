@@ -972,7 +972,7 @@ function review_(db) {
 
       if(e==='InstallmentPlans'&&r.monthlyMinor!==''&&Number(r.monthlyMinor)<0)add(e,r,'Expected installment amount cannot be negative');
 
-      if(e==='InstallmentPlans'&&r.originTransactionId){const origin=find('Transactions',r.originTransactionId);if(origin&&origin.type!=='FINANCED_PRINCIPAL')add(e,r,'Classify originating purchase as FINANCED_PRINCIPAL before linking a plan');}
+      if(e==='InstallmentPlans'&&r.originTransactionId){const origin=find('Transactions',r.originTransactionId);if(origin&&origin.type!=='FINANCED_PRINCIPAL')add(e,r,'Classify originating purchase as FINANCED_PRINCIPAL before linking a plan');if(origin&&(origin.status!=='ACTIVE'||origin.accountId!==r.accountId||origin.currency!==r.currency||r.cardId&&origin.cardId!==r.cardId))add(e,r,'Principal must be active and match the plan account, currency and card');}
 
       if(e==='SavedViews'){try{validateFilters_(JSON.parse(r.filters));if(!/^\w+:(asc|desc)$/.test(r.sort))throw Error();}catch(_){add(e,r,'Invalid saved filters or sort');}}
 
@@ -1090,7 +1090,7 @@ function validateFilters_(f) {
 
   if(!f||Array.isArray(f)||typeof f!=='object')fail_('VALIDATION: Invalid filters.');
 
-  const allowed=['category','recordId','q','personId','tag','status','requestStatus','settlement','expectedState','from','to','currency','dateBasis','accountId','cardId','statementId','statementDate','transactionId','shareId','type','spending','undated','installmentPlanId'];
+  const allowed=['noCard','category','recordId','q','personId','tag','status','requestStatus','settlement','expectedState','from','to','currency','dateBasis','accountId','cardId','statementId','statementDate','transactionId','shareId','type','spending','undated','installmentPlanId'];
 
   Object.keys(f).forEach(k=>{if(!allowed.includes(k)||(k==='type'&&Array.isArray(f[k])?f[k].length>30||f[k].some(v=>typeof v!=='string'||!CC_ENUMS['Transactions.type'].includes(v)):typeof f[k]!=='string'||f[k].length>300))fail_('VALIDATION: Invalid filter.');});
 
@@ -1122,6 +1122,7 @@ function filtered_(e,db,f,sort) {
 
     if(f.tag&&!String(t.tags||'').split(',').map(x=>x.trim().toLowerCase()).includes(f.tag.toLowerCase()))return false;
 
+    if(f.noCard==='true'&&t.cardId)return false;
     if(f.category&&String(t.category||'').toLowerCase()!==f.category.toLowerCase())return false;
     if(Array.isArray(f.type)&&f.type.length&&!f.type.includes(t.type))return false;
     if(f.recordId&&r.id!==f.recordId)return false;
