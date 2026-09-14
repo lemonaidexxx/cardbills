@@ -1,0 +1,252 @@
+<script>
+'use strict';
+(() => {
+  const $=id=>document.getElementById(id);
+  const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
+  const append=(p,...children)=>{children.filter(Boolean).forEach(c=>p.append(c));return p;};
+  const button=(text,fn,cls='secondary')=>{const b=el('button',cls,configured('button.'+text,text));b.type='button';b.addEventListener('click',fn);return b;};
+  const uuid=()=>crypto.randomUUID();
+  const state={boot:null,area:'Overview',entity:'Transactions',filters:{},sort:'updatedAt:desc',page:0,sequence:0,selected:null};
+  const areas={Overview:[],Transactions:['Transactions'],'Cards and Accounts':['Accounts','Cards'],Statements:['Statements'],'Bank Payments':['BankPayments','PaymentAllocations'],'Money Owed':['Shares'],People:['People'],Repayments:['Repayments'],Installments:['InstallmentPlans'],'Saved Views':['SavedViews'],Review:[],'Settings and Integration':[],Configuration:['Labels','ReportConfig']};
+  const labels={BankPayments:'Bank payments',PaymentAllocations:'Payment allocations',Shares:'Money owed',InstallmentPlans:'Installment plans',SavedViews:'Saved views',amountMinor:'Amount',balanceMinor:'Official balance',minimumMinor:'Minimum due',monthlyMinor:'Monthly amount',lastFour:'Last four digits',requestStatus:'Request status',calendarMode:'Calendar reminders',reconciliation:'Payment information',remainingMinor:'Remaining',cashMinor:'Cash received',creditMinor:'Credits / waivers',paidMinor:'Allocated payment',minimumRemainingMinor:'Minimum remaining',postedCount:'Posted installments'};
+  const configured=(key,fallback)=>state.boot?.configuration?.labels[key]??fallback;
+  const label=k=>configured('field.'+k,labels[k]||k.replace(/([A-Z])/g,' $1').trim().replace(/^./,s=>s.toUpperCase()));
+  const refs={accountId:'Accounts',cardId:'Cards',statementId:'Statements',paymentId:'BankPayments',transactionId:'Transactions',personId:'People',shareId:'Shares',installmentPlanId:'InstallmentPlans',replacesCardId:'Cards',originTransactionId:'Transactions',matchedTransactionId:'Transactions'};
+  const technical=new Set(['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','sourceKey','sourceRef']);
+  const displays={Labels:['key','value'],ReportConfig:['key','value'],Accounts:['nickname','bank','currency','status'],Cards:['nickname','accountId','lastFour','relationship','status'],Transactions:['description','transactionDate','amountMinor','currency','type','reviewStatus'],Statements:['accountId','statementDate','dueDate','balanceMinor','remainingMinor','settlement','calendarMode'],BankPayments:['accountId','date','amountMinor','currency','status'],PaymentAllocations:['paymentId','statementId','amountMinor','status'],People:['name','contact','status'],Shares:['personId','transactionId','amountMinor','remainingMinor','requestStatus','settlement'],Repayments:['shareId','date','amountMinor','currency','type','status'],InstallmentPlans:['reference','accountId','count','postedCount','status'],SavedViews:['name','scope','status']};
+  const dateBases={Transactions:['transactionDate','postingDate'],Statements:['statementDate','dueDate'],Shares:['transactionDate','expectedDate','requestDate'],BankPayments:['date'],Repayments:['date']};
+  const subtitles={Overview:'Activity, statements and personal collections, each with its own ledger.',Transactions:'Review activity, add tags and assign purchases to people.',Statements:'Official billed amounts and confirmed allocations. Blank means unknown.','Money Owed':'Track requests, partial repayments and agreed credits independently.','Settings and Integration':'Manage configuration, Calendar reminders and recovery.'};
+  function notice(text,kind=''){const n=$('notice');n.replaceChildren();if(text)n.append(el('div','notice '+kind,text));}
+  function rpc(name,...args){return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('The request timed out. Refresh before retrying a change; it may have completed.')),30000);
+    const ok=v=>{clearTimeout(timer);resolve(v);},bad=e=>{clearTimeout(timer);reject(new Error(e.message||'Request failed.'));};
+    try{if(!window.google||!google.script)throw Error('Open the Apps Script web-app URL.');
+      const runner=google.script.run.withSuccessHandler(ok).withFailureHandler(bad);
+      if(typeof runner[name]!=='function')throw Error('Backend function '+name+' is missing. Replace Code.gs and deploy a new version.');runner[name](...args);
+    }catch(e){bad(e);}
+  });}
+
+  async function action(fn){try{return await fn();}catch(e){notice(e.message,'error');if(!state.boot)$('content').replaceChildren(el('div','empty','Workspace could not load. Correct the error above, then select Refresh data.'));return null;}}
+  function money(n,c){if(n===''||n===null||n===undefined)return 'Unknown';const p=state.boot?.currencies[c]??2;return (Number(n)/10**p).toLocaleString(undefined,{minimumFractionDigits:p,maximumFractionDigits:p})+(c?' '+c:'');}
+  function decimal(n,c){if(n===''||n===null||n===undefined)return '';const p=state.boot.currencies[c];return (Number(n)/10**p).toFixed(p);}
+  function toMinor(s,c){if(s==='')return '';const p=state.boot.currencies[c];if(p===undefined)throw Error('Choose a confirmed currency.');if(!/^-?\d+(\.\d+)?$/.test(s.trim()))throw Error('Enter amount without commas.');const [a,b='']=s.trim().replace('-','').split('.');if(b.length>p)throw Error('Too many decimal places for '+c);const n=Number(a)*10**p+Number(b.padEnd(p,'0'));if(!Number.isSafeInteger(n)||n>1e12)throw Error('Amount is too large.');return s.trim().startsWith('-')?-n:n;}
+  function lookup(type,id){return (state.boot.lookups[type]||[]).find(x=>x.id===id)?.label||id||'—';}
+  function display(r,k){if(refs[k])return lookup(refs[k],r[k]);if(/Minor$/.test(k))return money(r[k],r.currency||currencyFor(r));if(r[k]==='')return '—';return String(r[k]??'—');}
+  function currencyFor(r){return (state.boot.lookups.BankPayments||[]).find(x=>x.id===r.paymentId)?.currency||(state.boot.lookups.Shares||[]).find(x=>x.id===r.shareId)?.currency||'';}
+  function field(name,control,hint){const l=el('label','',label(name));control.name=name;l.append(control);if(hint)l.append(el('small','',hint));return l;}
+  function input(value='',type='text'){const n=el('input');n.type=type;n.value=value;return n;}
+  function select(options,value='',empty=true){const n=el('select');if(empty)n.append(new Option('Select…',''));options.forEach(o=>n.append(new Option(typeof o==='string'?label(o):o.label,typeof o==='string'?o:o.id)));n.value=value;return n;}
+  let dialogOpener=null;
+  function openDialog(title,content){if(!$('dialog').open)dialogOpener=document.activeElement;$('dialog-title').textContent=title;$('dialog-content').replaceChildren(content);$('dialog-error').textContent='';if(!$('dialog').open)$('dialog').showModal();setTimeout(()=>$('dialog-content').querySelector('input,select,textarea,button')?.focus(),0);}
+  $('close-dialog').addEventListener('click',()=>$('dialog').close());
+  $('dialog').addEventListener('close',()=>{if(dialogOpener?.isConnected)dialogOpener.focus();});
+  $('dialog').addEventListener('keydown',e=>{if(e.key!=='Tab')return;const nodes=[...$('dialog').querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]')].filter(n=>n.getClientRects().length);const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}});
+  function navigate(area,entity,filters={}){state.area=area;state.entity=entity||areas[area][0]||'';state.filters=area==='Money Owed'?Object.assign({status:'ACTIVE'},filters):filters;state.page=0;state.selected=null;state.sort='updatedAt:desc';renderNav();action(render);}
+  function renderNav(){$('nav').replaceChildren();Object.keys(areas).forEach(area=>{const b=button(configured('nav.'+area,area),()=>navigate(area),'');if(area===state.area)b.setAttribute('aria-current','page');$('nav').append(b);});}
+  async function refresh(){notice('Loading current records…','loading');const view=['Overview','Review','Settings and Integration'].includes(state.area)?null:{entity:state.entity,filters:state.filters,page:state.page,sort:state.sort};const b=await rpc('apiBootstrap',view);state.boot=b;document.querySelector('.brand-title').textContent=configured('app.title','Card workspace');document.title=configured('app.title','Card workspace');document.querySelector('.brand small').textContent=configured('app.subtitle','Shared transaction workspace');$('refresh').textContent=configured('button.Refresh data','Refresh data');notice(b.overview.invalid?'Invalid records or pending operations need review. Financial overview totals are withheld.':'');renderNav();await render(b.currentPage);}
+  $('refresh').addEventListener('click',()=>action(refresh));
+  async function render(prefetched){if(!state.boot)return;const seq=++state.sequence;$('title').textContent=configured('nav.'+state.area,state.area);$('subtitle').textContent=subtitles[state.area]||'Manage records and preserve their history.';$('content').replaceChildren();renderContext();
+    if(state.area==='Overview'){renderOverview();return;}
+    if(state.area==='Review'){renderReview();return;}
+    if(state.area==='Settings and Integration'){renderSettings();return;}
+    renderToolbar();const container=el('div');$('content').append(container);container.append(el('div','empty','Loading records…'));
+    try{const result=prefetched||await rpc('apiList',state.entity,state.filters,state.page,state.sort);if(seq!==state.sequence)return;container.replaceChildren();renderTable(container,result);}
+    catch(e){if(seq===state.sequence){container.replaceChildren(el('div','empty',e.message));notice(e.message,'error');}}
+  }
+  function renderOverview(){const o=state.boot.overview,c=$('content');
+    if(o.invalid)c.append(el('div','review-banner','Totals are unavailable until invalid records and pending operations are resolved. Open Review for details.'));
+    const pending=Object.values(o.totals).reduce((n,t)=>n+(t.unclassifiedCount||0),0);if(pending)c.append(el('div','review-banner',pending+' entries await an activity type. Classify purchases, payments and credits in Transactions.'));
+    const metrics=el('div','metrics');Object.entries(o.totals).forEach(([cur,t])=>{
+      [['Classified spending',t.spendingMinor,'Transactions',{currency:cur,status:'ACTIVE',spending:'true'},'Charges only · posted installment basis'],['Money owed to you',t.owedMinor,'Money Owed',{currency:cur,status:'ACTIVE'},'Confirmed receipts and credits deducted'],[t.unknownStatements&&t.knownStatements?'Known statement remainder':'Statement remainder',t.statementRemainingMinor,'Statements',{currency:cur,status:'OPEN'},t.unknownStatements+' statements have unknown balances'],['Cash received',t.cashMinor,'Repayments',{currency:cur,status:'CONFIRMED',type:'CASH'},'Personal repayments only']].forEach(([title,n,area,filters,hint])=>{
+        const b=button('',()=>navigate(area,undefined,filters),'metric');append(b,el('span','',title),el('strong','',money(n,cur)),el('span','',hint));metrics.append(b);
+      });
+    });if(metrics.childNodes.length)c.append(metrics);else if(!o.invalid){const e=el('div','empty');append(e,el('h2','','Your workspace is ready to begin'),el('p','','Start with a billing account and a masked card. Add statements from official bank records, or preview a sanitized transaction import.'),button('Add an account',()=>editRecord('Accounts')));c.append(e);}
+    const activity=el('section','card');append(activity,el('h2','','Recorded spending by posting month'),el('p','subtle','Purchases, fees, interest, cash advances and installments. Credits and financed principal are excluded. Select a month to inspect records.'));
+    const bars=el('div','activity');const maxBy={};Object.entries(o.months).forEach(([k,n])=>{const cur=k.split(' ')[0];maxBy[cur]=Math.max(maxBy[cur]||1,n);});
+    Object.entries(o.months).sort().slice(-12).forEach(([k,n])=>{const [cur,month]=k.split(' ');const b=button('',()=>{if(month==='Undated')navigate('Transactions',undefined,{currency:cur,dateBasis:'postingDate',spending:'true',undated:'true'});else{const end=new Date(Date.UTC(+month.slice(0,4),+month.slice(5,7),0)).toISOString().slice(0,10);navigate('Transactions',undefined,{currency:cur,dateBasis:'postingDate',from:month+'-01',to:end,status:'ACTIVE',spending:'true'});}},'');const line=el('span');append(line,el('span','',k),el('span','',money(n,cur)));const bar=el('div','bar');bar.style.width=Math.max(1,n/maxBy[cur]*100)+'%';append(b,line,bar);bars.append(b);});activity.append(bars.childNodes.length?bars:el('p','subtle','No classified spending yet. Imported transactions remain in Review until classified.'));c.append(activity);
+    const recent=el('section','card');append(recent,el('h2','','Recent transactions'));simpleTable(recent,'Transactions',o.recent);c.append(recent);
+  }
+  function renderContext(){const c=$('context');c.replaceChildren();append(c,el('p','eyebrow','AT A GLANCE'),el('h2','','Upcoming statements'));const o=state.boot.overview;
+    o.upcoming.forEach(s=>{const d=el('div','upcoming');append(d,el('strong','',lookup('Accounts',s.accountId)),el('span','',s.dueDate+' · '+money(s.remainingMinor,s.currency)),el('p','subtle',s.reconciliation==='VERIFIED'?'Payment information verified':'Payment information unverified'));d.append(button('View statement',()=>showDetails('Statements',s),'quiet'));c.append(d);});
+    if(!o.upcoming.length)c.append(el('p','subtle','No upcoming statements recorded.'));
+    const note=el('div','context-note');append(note,el('strong','','Data freshness'),el('p','',o.freshness?'Latest recorded activity date: '+o.freshness:'No transactions imported.'),el('p','','These records are not a live bank connection. A repayment to you does not pay the bank.'));c.append(note);
+  }
+  function renderToolbar(){const c=$('content'),tabs=areas[state.area];if(tabs.length>1){const t=el('div','section-tabs');tabs.forEach(e=>t.append(button(label(e),()=>{state.entity=e;state.filters={};state.page=0;render();},e===state.entity?'active':'')));c.append(t);}
+    const bar=el('div','toolbar'),search=input(state.filters.q||'','search');search.placeholder='Descriptions, names and notes';search.addEventListener('change',()=>{state.filters.q=search.value;state.page=0;render();});bar.append(field('Search',search));
+    bar.append(button('Add '+label(state.entity).toLowerCase(),()=>editRecord(state.entity)));
+    if(state.entity==='Transactions')bar.append(button('Import CSV',showImport));
+    if(state.entity==='Shares')bar.append(button('Preview report',showReport));
+    c.append(bar);
+    const more=el('details');more.open=Object.keys(state.filters).some(k=>k!=='q'&&state.filters[k]);more.append(el('summary','','Filters and sorting'));
+    const f=el('div','filters');
+    const choices={currency:Object.keys(state.boot.currencies),status:state.boot.enums[state.entity+'.status']||[],requestStatus:state.boot.enums['Shares.requestStatus'],settlement:['OPEN','PARTIAL','SETTLED','UNKNOWN'],expectedState:['PAST_EXPECTED_DATE','NOT_PAST_EXPECTED_DATE']};
+    const filterFields=['currency','status'];if(['Transactions','Shares'].includes(state.entity))filterFields.push('personId','tag');if(state.entity==='Shares')filterFields.push('requestStatus','settlement','expectedState');if(state.entity==='Statements')filterFields.push('settlement');
+    filterFields.forEach(k=>{const n=k==='personId'?select(state.boot.lookups.People,state.filters[k]):choices[k]?select(choices[k],state.filters[k]):input(state.filters[k]||'');n.addEventListener('change',()=>{state.filters[k]=n.value;state.page=0;render();});f.append(field(k,n));});
+    if(dateBases[state.entity]){const n=select(dateBases[state.entity],state.filters.dateBasis||dateBases[state.entity][0],false);n.addEventListener('change',()=>{state.filters.dateBasis=n.value;state.page=0;render();});f.append(field('dateBasis',n));['from','to'].forEach(k=>{const n=input(state.filters[k]||'','date');n.addEventListener('change',()=>{state.filters[k]=n.value;state.page=0;render();});f.append(field(k,n));});}
+    const sort=select((displays[state.entity]||[]).flatMap(k=>[{id:k+':asc',label:label(k)+' ascending'},{id:k+':desc',label:label(k)+' descending'}]).concat([{id:'updatedAt:desc',label:'Recently updated'}]),state.sort,false);sort.addEventListener('change',()=>{state.sort=sort.value;render();});f.append(field('Sort',sort));
+    append(more,f,button('Clear filters',()=>{state.filters={};state.page=0;render();}),['Transactions','Shares','Statements','BankPayments','Repayments'].includes(state.entity)?button('Save this view',()=>editRecord('SavedViews',{name:'',scope:state.entity,filters:JSON.stringify(state.filters),sort:state.sort,status:'ACTIVE'})):null);c.append(more);
+  }
+  function simpleTable(container,entity,rows){if(!rows.length){container.append(el('div','empty','No records to display.'));return;}const wrap=el('div','table-scroll'),table=el('table'),thead=el('thead'),tr=el('tr');(displays[entity]||[]).forEach(k=>{const th=el('th','',label(k));th.scope='col';tr.append(th);});thead.append(tr);table.append(thead);const body=el('tbody');rows.forEach(r=>{const row=el('tr');displays[entity].forEach((k,i)=>{const td=el('td');if(i===0)td.append(button(display(r,k),()=>showDetails(entity,r),''));else if(/status|settlement|reviewStatus/.test(k))td.append(el('span','badge',display(r,k)));else td.textContent=display(r,k);row.append(td);});body.append(row);});table.append(body);wrap.append(table);container.append(wrap);}
+  function renderTable(container,result){if(result.issues.some(x=>x.severity==='ERROR'))container.append(el('div','review-banner','This table contains invalid records. Treat calculated values as provisional until repaired.'));
+    if(result.summary){Object.entries(result.summary).forEach(([cur,t])=>{const panel=el('section','card');panel.append(el('h2','','Collections · '+cur));const metrics=el('div','metrics');[['Assigned',t.assigned],['Cash received',t.cash],['Credits / waivers',t.credits],['Remaining owed',t.remaining]].forEach(([name,n])=>{const d=el('div','metric');append(d,el('span','',name),el('strong','',money(n,cur)));metrics.append(d);});panel.append(metrics);const counts=el('div','toolbar');[['Not requested',t.notRequested,{requestStatus:'NOT_REQUESTED'}],['Partially settled',t.partial,{settlement:'PARTIAL'}],['Settled',t.settled,{settlement:'SETTLED'}],['Disputed',t.disputed,{requestStatus:'DISPUTED'}],['Past expected date',t.pastExpected,{expectedState:'PAST_EXPECTED_DATE'}]].forEach(([name,n,f])=>counts.append(button(name+' ('+n+')',()=>{state.filters=Object.assign({},state.filters,f,{currency:cur});state.page=0;render();})));append(panel,el('p','subtle','Active shares within the current filters. Request status and settlement are independent.'),counts);container.append(panel);});}
+    simpleTable(container,state.entity,result.rows);const pager=el('div','pager');pager.append(el('span','',result.total+' records · page '+(result.page+1)+' of '+Math.max(1,Math.ceil(result.total/40))));const controls=el('div');const prev=button('Previous',()=>{state.page--;render();}),next=button('Next',()=>{state.page++;render();});prev.disabled=result.page===0;next.disabled=(result.page+1)*40>=result.total;append(controls,prev,next);pager.append(controls);container.append(pager);}
+  function showDetails(entity,r){state.selected=r;const c=$('context');c.replaceChildren();append(c,el('p','eyebrow','RECORD DETAILS'),el('h2','',label(entity)));const details=el('div');Object.keys(r).filter(k=>!k.startsWith('_')&&!['fingerprint','revision','sourceKey'].includes(k)).forEach(k=>{const d=el('div','detail-row');append(d,el('span','',label(k)),el('strong','',k==='totals'?Object.entries(r.totals).map(([cur,n])=>money(n,cur)).join(', '):display(r,k)));details.append(d);});c.append(details);c.append(button('Edit record',()=>editRecord(entity,r)));
+    if(entity==='Transactions')c.append(button('Assign a share',()=>editRecord('Shares',{transactionId:r.id,currency:r.currency,status:'ACTIVE',requestStatus:'NOT_REQUESTED'})));
+    if(entity==='Shares')c.append(button('Record repayment or credit',()=>editRecord('Repayments',{shareId:r.id,currency:r.currency,type:'CASH',status:'PENDING',date:state.boot.today})));
+    if(entity==='Statements')c.append(button('Allocate bank payment',()=>editRecord('PaymentAllocations',{statementId:r.id,status:'ACTIVE'})));
+    if(entity==='BankPayments')c.append(button('Allocate to statement',()=>editRecord('PaymentAllocations',{paymentId:r.id,status:'ACTIVE'})));
+    if(entity==='Accounts')c.append(button('Statement history',()=>navigate('Statements',undefined,{accountId:r.id})));
+    if(entity==='Cards')c.append(button('Card transactions',()=>navigate('Transactions',undefined,{cardId:r.id})));
+    if(entity==='InstallmentPlans')c.append(button('View installment schedule',()=>action(async()=>{const rows=await rpc('apiInstallmentSchedule',r.id),box=el('div');box.append(el('p','subtle','Expected dates are a monthly plan estimate, not bank due dates. Posted progress counts linked installment charges.'));const wrap=el('div','table-scroll'),table=el('table');const head=el('tr');['Number','Expected date','Expected amount','Status'].forEach(k=>head.append(el('th','',k)));table.append(head);rows.forEach(x=>{const row=el('tr');[x.number,x.expectedDate,x.expectedAmount+' '+x.currency,x.status].forEach(v=>row.append(el('td','',v)));table.append(row);});append(wrap,table);append(box,wrap,button('View linked transactions',()=>{$('dialog').close();navigate('Transactions',undefined,{installmentPlanId:r.id});}));openDialog('Installment schedule',box);})))
+    if(entity==='People')c.append(button('Collection history',()=>navigate('Money Owed',undefined,{personId:r.id})));
+    if(entity==='SavedViews')c.append(button('Open saved view',()=>{try{navigate(Object.keys(areas).find(a=>areas[a].includes(r.scope)),r.scope,JSON.parse(r.filters));state.sort=r.sort;render();}catch(_){notice('Invalid saved view. Edit its filters.','error');}}));
+    if(window.innerWidth<1150)c.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  function editRecord(entity,record={}){
+    const form=el('form'),grid=el('div','form-grid'),controls={};const isEdit=!!record.id;
+    const defaults={status:entity==='Statements'?'OPEN':['BankPayments','Repayments'].includes(entity)?'PENDING':'ACTIVE',reviewStatus:'REVIEW',relationship:'PRIMARY',type:entity==='Repayments'?'CASH':'PURCHASE',requestStatus:'NOT_REQUESTED',reconciliation:'UNVERIFIED',calendarMode:'OFF',currency:state.boot.settings.DefaultCurrency||'',filters:'{}',sort:'updatedAt:desc'};
+    const editable=state.boot.schema[entity].split(' ').filter(k=>!technical.has(k));
+    editable.forEach(k=>{
+      let value=record[k]??defaults[k]??'',n;const options=state.boot.enums[entity+'.'+k];
+      if(refs[k])n=select(state.boot.lookups[refs[k]]||[],value);
+      else if(options)n=select(options,value);
+      else if(k==='currency')n=select(Object.keys(state.boot.currencies),value);
+      else if(['notes','originalDescription','filters'].includes(k)){n=el('textarea');n.value=value;}
+      else if(/Minor$/.test(k))n=input(value===''?'':decimal(value,record.currency||currencyFor(record)||state.boot.settings.DefaultCurrency),'text');
+      else if(/Date$|^date$|^periodStart$|^periodEnd$/.test(k))n=input(value,'date');
+      else n=input(value);
+      n.id='edit-'+k;n.required=(state.boot.required[entity]||'').split(' ').includes(k);controls[k]=n;
+      const hints={tags:'Comma-separated labels. Tags do not create obligations.',lastFour:'Exactly four digits. Never enter full card numbers.',balanceMinor:'Official bank statement balance. Leave blank if unknown.',minimumMinor:'Official minimum due. Leave blank if unknown.',reconciliation:'VERIFIED means you have checked bank-payment information.',notes:'Private; excluded from shareable reports.',amountMinor:'Decimal currency amount. No thousands separators.',status:['BankPayments','Repayments'].includes(entity)?'Confirm only after verifying receipt. Reverse corrections; keep history.':'',filters:'JSON object using the supported Saved View filters.'};
+      const l=field(k,n,hints[k]);if(['notes','originalDescription','description','filters','tags'].includes(k))l.classList.add('wide');grid.append(l);
+    });
+    const relation=controls.accountId||controls.shareId||controls.transactionId;if(relation&&controls.currency)relation.addEventListener('change',()=>{const type=refs[relation.name];const item=(state.boot.lookups[type]||[]).find(x=>x.id===relation.value);if(item?.currency)controls.currency.value=item.currency;});
+    append(form,el('p','subtle','Use stable linked records. Amounts are entered as decimals and stored as exact minor units. Required fields must be completed.'),grid);
+    const save=button('Save record',()=>{},'');save.type='submit';append(form,append(el('div','form-actions'),button('Cancel',()=>$('dialog').close()),save));let requestId=uuid();
+    form.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;$('dialog-error').textContent='';try{
+      const data={};if(isEdit)data.id=record.id;const cur=controls.currency?.value||currencyFor(Object.fromEntries(Object.entries(controls).map(([k,n])=>[k,n.value])));
+      editable.forEach(k=>data[k]=/Minor$/.test(k)?toMinor(controls[k].value,cur):controls[k].value);
+      await rpc('apiSave',entity,data,record._token||'',requestId);$('dialog').close();await refresh();notice('Record saved. Calendar changes will be reconciled by automation or manual sync.');
+    }catch(err){$('dialog-error').textContent=err.message;}finally{save.disabled=false;}});openDialog((isEdit?'Edit ':'Add ')+label(entity).toLowerCase(),form);
+  }
+  function renderReview(){const c=$('content');append(c,el('p','subtle','Errors block totals, imports, reports and synchronization. Warnings identify records requiring judgment. Technical IDs and missing references may need repair directly in Sheets.'));
+    if(!state.boot.issues.length){c.append(el('div','empty','No review issues found.'));return;}const list=el('div','issues');state.boot.issues.forEach(x=>{const row=el('div','issue '+(x.severity==='ERROR'?'error':''));append(row,el('strong','',label(x.entity)),el('p','',x.message));if(x.message.startsWith('A tracked row was removed')){
+      ['restore','accept'].forEach(mode=>{const request=uuid();row.append(button(mode==='restore'?'Restore deleted record':'Accept intentional deletion',()=>action(async()=>{
+        await rpc('apiResolveMissing',x.entity,x.id,mode,request);await refresh();notice(mode==='restore'?'Record restored from saved history.':'Deletion accepted. Saved history is retained.');
+      })));});row.append(el('small','',x.id));
+    }if(areas[Object.keys(areas).find(a=>areas[a].includes(x.entity))])row.append(button('Open table',()=>navigate(Object.keys(areas).find(a=>areas[a].includes(x.entity)),x.entity),''));else row.append(button('Open recovery settings',()=>navigate('Settings and Integration'),''));list.append(row);});c.append(list);}
+  function renderSettings(){const c=$('content'),form=el('form','card'),grid=el('div','form-grid');form.append(el('h2','','Workspace settings'));const controls={};Object.entries(state.boot.settings).filter(([k])=>k!=='CalendarId').forEach(([k,v])=>{const n=['SyncEnabled','ShowAmounts','IncludeHistorical','BackupEnabled'].includes(k)?select([{id:'false',label:'Disabled'},{id:'true',label:'Enabled'}],String(v),false):k==='DefaultCurrency'?select(Object.keys(state.boot.currencies),v):input(v);controls[k]=n;grid.append(field(k,n));});form.append(grid);const save=button('Save settings',()=>{},'');save.type='submit';form.append(append(el('div','form-actions'),save));form.addEventListener('submit',e=>{e.preventDefault();action(async()=>{save.disabled=true;try{await rpc('apiSettings',Object.fromEntries(Object.entries(controls).map(([k,n])=>[k,n.value])),state.boot.diagnostics.settingsToken,uuid());await refresh();notice('Settings saved.');}finally{save.disabled=false;}});});c.append(form);
+    const integration=el('section','card');append(integration,el('h2','','Calendar and automation'),el('p','subtle','Synchronization is one way. Stopping automation leaves existing Calendar reminders in place. Pause statements and synchronize to disable their reminders.'),el('p','','Selected calendar: '+(state.boot.settings.CalendarId||'None')));
+    const commands=[['Test Calendar','apiCalendarTest'],['Preview synchronization','apiSyncPreview'],['Synchronize now','apiSync'],['Install / repair triggers','installTriggers'],['Stop automation','stopAutomation'],['Repair reminder time','repairSettings'],['Create private backup','apiBackup']];const buttons=el('div','toolbar');commands.forEach(([title,method])=>buttons.append(button(title,()=>action(async()=>{notice(title+'…','loading');const r=await rpc(method);const box=el('div');if(Array.isArray(r))r.forEach(x=>box.append(el('p','',JSON.stringify(x))));else if(r.url){const a=el('a','','Open private backup');a.href=r.url;a.target='_blank';a.rel='noopener';append(box,el('p','',r.message),a);}else box.append(el('p','',JSON.stringify(r)));openDialog(title,box);await refresh();notice('Operation finished.');}))));buttons.append(button('Select or create calendar',chooseCalendar));integration.append(buttons);c.append(integration);
+    const d=state.boot.diagnostics,diag=el('section','card');append(diag,el('h2','','Diagnostics and recovery'),el('p','','Registered triggers: '+d.triggers.length),el('p','','Last reconciliation run: '+(d.lastSync||'Never')),el('p','','Last backup: '+(d.lastBackup||'Never')),el('p','',d.automationError||'No recorded automation error.'));
+    d.pending.forEach(op=>diag.append(button('Resume '+op.kind,()=>action(async()=>{await rpc('apiRecover',op.id);await refresh();notice('Operation recovered.');}))));if(!d.pending.length)diag.append(el('p','subtle','No pending writes.'));c.append(diag);
+  }
+  async function chooseCalendar(){await action(async()=>{const calendars=await rpc('apiCalendars'),box=el('div'),choice=select(calendars,state.boot.settings.CalendarId);append(box,field('Calendar',choice),button('Create dedicated calendar',()=>action(async()=>{const x=await rpc('apiCreateCalendar');choice.append(new Option(x.label,x.id));choice.value=x.id;notice('Calendar created. Preview selection to use it.');})),button('Preview selection',()=>action(async()=>{const p=await rpc('apiCalendarMigrationPreview',choice.value),confirm=el('div');append(confirm,el('p','',p.message),el('p','',p.eventsToRetire+' existing events will have reminders disabled.'),button('Apply calendar selection',()=>action(async()=>{await rpc('apiCalendarMigrate',p.target,p.token,uuid());$('dialog').close();await refresh();})));openDialog('Confirm Calendar migration',confirm);})));openDialog('Select reminder calendar',box);});}
+  async function showReport(){const box=el('div');box.append(el('p','','Export only the current filtered shares for one person. Review the complete snapshot before downloading. Private notes, card details and source references are excluded.'));const fields=state.boot.configuration.report.fields,checks={};fields.forEach(k=>{const n=input('','checkbox');n.checked=true;checks[k]=n;box.append(append(el('label','check-label'),n,document.createTextNode(label(k))));});box.append(button('Generate preview',()=>action(async()=>{const report=await rpc('apiReport',state.filters,fields.filter(k=>checks[k].checked));const html=reportHtml(report),preview=el('div'),frame=el('iframe','report-frame');frame.title='Shareable report preview';frame.setAttribute('sandbox','');frame.srcdoc=html;append(preview,el('p','','Snapshot contains '+report.rows.length+' selected shares. It is not a live balance.'),frame,button('Download HTML report',()=>{const url=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'})),a=el('a');a.href=url;a.download='repayment-report-'+report.generatedAt.slice(0,10)+'.html';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}));preview.append(el('p','subtle','Open the downloaded HTML and use Print → Save as PDF. Share only after reviewing the snapshot.'));openDialog('Report preview',preview);})));openDialog('Choose report fields',box);}
+  function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function reportHtml(r){return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'+escapeHtml(r.title||'Repayment snapshot')+'</title><style>body{font:14px system-ui;color:#292737;margin:32px}h1{font-size:26px}p{color:#605b69}table{border-collapse:collapse;width:100%}th,td{padding:10px;text-align:left;border-bottom:1px solid #ddd}th{background:#eee8f6}@media print{body{margin:0;font-size:10px}tr{break-inside:avoid}}</style><h1>'+escapeHtml(r.title||'Repayment snapshot')+'</h1><p>Generated '+escapeHtml(r.generatedAt)+'. A snapshot of selected records, not a live balance.</p><table><thead><tr>'+r.fields.map(k=>'<th>'+escapeHtml(label(k))+'</th>').join('')+'</tr></thead><tbody>'+r.rows.map(row=>'<tr>'+r.fields.map(k=>'<td>'+escapeHtml(row[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table></html>';}
+  function showImport(){
+    let batch=null,mappings={},selected=new Set(),busy=false,running=false,pauseRequested=false,sourceCsv='',mappingDirty=false;
+    const box=el('div'),status=el('p','notice','Choose a sanitized CSV to begin.'),file=input('','file'),mappingBox=el('div','form-grid'),results=el('div');
+    const cardDrafts=new Map();
+    file.accept='.csv,text/csv';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    const savedKey='cc-import-batch';const saved=()=>{try{return sessionStorage.getItem(savedKey);}catch(_){return null;}};
+    const remember=id=>{try{sessionStorage.setItem(savedKey,id);}catch(_){}};
+    const setBusy=value=>{busy=value;box.querySelectorAll('button,input,select').forEach(n=>n.disabled=value||n.dataset.fixedDisabled==='true');pause.disabled=!running;};
+    async function run(phase,fn){if(busy)return;setBusy(true);status.textContent=phase;try{await fn();}catch(e){status.textContent='Paused — '+e.message+' Use Check saved progress before retrying.';status.className='notice error';}finally{running=false;setBusy(false);}}
+    function accept(data,reset=false){batch=data;remember(data.batchId);if(reset){mappings=data.mappings||{};selected=new Set(data.selection);renderMappings();}renderPage();}
+    function renderMappings(){mappingBox.replaceChildren();batch.groups.forEach(group=>{
+      const entry=mappings[group]||{},card=select(state.boot.lookups.Cards,entry.cardId||''),cur=select(Object.keys(state.boot.currencies),entry.currency||'');card.disabled=busy;cur.disabled=busy;
+      card.append(new Option(configured('button.+ Add new card…','+ Add new card…'),'__add'));
+      card.addEventListener('change',()=>{if(card.value==='__add'){card.value=entry.cardId||'';addImportCard(group,card);return;}mappings[group]=Object.assign(mappings[group]||{},{cardId:card.value});mappingDirty=true;});
+      cur.addEventListener('change',()=>{mappings[group]=Object.assign(mappings[group]||{},{currency:cur.value});mappingDirty=true;});
+      mappingBox.append(field(group,card),field('Confirmed currency',cur));
+    });}
+    function addImportCard(group,opener){
+      if(cardDrafts.has(group)){cardDrafts.get(group)();return;}
+      const parts=group.split(' | '),panel=el('form','card'),grid=el('div','form-grid'),error=el('p','notice error');error.setAttribute('role','alert');
+      const account=select(state.boot.lookups.Accounts.filter(a=>a.status==='ACTIVE'));
+      account.append(new Option(configured('button.+ Create new account…','+ Create new account…'),'__new'));
+      if(!state.boot.lookups.Accounts.some(a=>a.status==='ACTIVE'))account.value='__new';
+      const bank=input(parts[0]||''),accountName=input(parts[0]||''),nickname=input(parts.slice(1,-1).join(' | ')||''),lastFour=input(parts.at(-1)||''),currency=select(Object.keys(state.boot.currencies),mappings[group]?.currency||state.boot.settings.DefaultCurrency||'');
+      nickname.required=true;lastFour.required=true;lastFour.pattern='[0-9]{4}';lastFour.maxLength=4;account.required=true;currency.required=true;
+      const bankField=field('bank',bank),nameField=field('accountNickname',accountName);
+      append(grid,field('accountId',account),bankField,nameField,field('nickname',nickname),field('lastFour',lastFour),field('currency',currency));
+      const update=()=>{const creating=account.value==='__new';bankField.hidden=nameField.hidden=!creating;bank.required=accountName.required=creating;};account.addEventListener('change',update);update();
+      const siblings=[...box.children];const show=()=>{siblings.forEach(n=>n.hidden=true);box.append(panel);account.focus();};cardDrafts.set(group,show);show();
+      const finish=()=>{cardDrafts.delete(group);panel.remove();siblings.forEach(n=>n.hidden=false);renderMappings();mappingBox.querySelector('select')?.focus();};
+      const cancel=button('Cancel',()=>{panel.remove();siblings.forEach(n=>n.hidden=false);if(opener.isConnected)opener.focus();else mappingBox.querySelector('select')?.focus();});
+      const save=button('Save and select card',()=>{});save.type='submit';
+      append(panel,el('h3','',configured('button.+ Add new card…','+ Add new card…')),grid,error,append(el('div','form-actions'),cancel,save));account.focus();
+      const accountRequest=uuid(),cardRequest=uuid();let payload=null,accountId='',saving=false;
+      panel.addEventListener('submit',async e=>{e.preventDefault();if(saving)return;error.textContent='';
+        if(!nickname.value.trim()||(account.value==='__new'&&(!bank.value.trim()||!accountName.value.trim()))){error.textContent='Complete the nickname and required account fields.';return;}
+        if(!payload){const existing=state.boot.lookups.Accounts.find(a=>a.id===account.value);if(account.value!=='__new'&&(!existing||existing.currency!==currency.value)){error.textContent='Choose an active account with the confirmed currency.';return;}
+          payload={account:{bank:bank.value.trim(),nickname:accountName.value.trim(),currency:currency.value,status:'ACTIVE',reviewStatus:'REVIEW'},card:{nickname:nickname.value.trim(),lastFour:lastFour.value,relationship:'PRIMARY',status:'ACTIVE'},currency:currency.value};accountId=existing?.id||'';
+        }
+        payload.card.nickname=nickname.value.trim();payload.card.lastFour=lastFour.value;
+        saving=true;grid.querySelectorAll('input,select').forEach(n=>n.disabled=true);save.disabled=cancel.disabled=true;
+        try{
+          if(!accountId)accountId=(await rpc('apiSave','Accounts',payload.account,'',accountRequest)).id;
+          const result=await rpc('apiSave','Cards',{...payload.card,accountId},'',cardRequest);
+          const lookups=await rpc('apiImportLookups');Object.assign(state.boot.lookups,{Accounts:lookups.Accounts,Cards:lookups.Cards});
+          mappings[group]={cardId:result.id,currency:payload.currency};mappingDirty=true;finish();status.textContent='Card saved. Validate mappings and preview before importing.';
+        }catch(err){error.textContent=err.message+' Retry Save and select card to check the same operation. Entered values are retained.';if(/VALIDATION:/.test(err.message)){if(!accountId){payload=null;grid.querySelectorAll('input,select').forEach(n=>n.disabled=false);}else{nickname.disabled=lastFour.disabled=false;}}}
+        finally{saving=false;save.disabled=cancel.disabled=false;}
+      });
+    }
+    function renderPage(){
+      results.replaceChildren();if(!batch)return;
+      status.className='notice';status.textContent=batch.state+' · '+batch.total+' source rows · '+batch.progress.imported+' imported · '+selected.size+' selected';
+      results.append(el('p','',Object.entries(batch.counts).map(([k,v])=>k+': '+v).join(' · ')));
+      const wrap=el('div','table-scroll import-preview'),table=el('table'),head=el('tr');['Select','Date','Description','Amount','Outcome'].forEach(k=>head.append(el('th','',k)));table.append(head);
+      batch.rows.forEach(r=>{
+        const tr=el('tr'),check=input('','checkbox');check.setAttribute('aria-label','Import source row '+(r.index+1));check.checked=selected.has(r.index);
+        check.dataset.fixedDisabled=String(!['ACCEPTED','SUSPECT'].includes(r.status)||batch.progress.cursor>0);check.disabled=busy||check.dataset.fixedDisabled==='true';
+        check.addEventListener('change',()=>{if(check.checked)selected.add(r.index);else selected.delete(r.index);});
+        append(tr,append(el('td'),check),el('td','',r.date),el('td','',r.description),el('td','',r.amount),el('td','',r.status+' '+r.reason));table.append(tr);
+      });wrap.append(table);results.append(wrap);
+      const pager=el('div','pager'),previous=button('Previous preview page',()=>run('Loading preview…',async()=>accept(await rpc('apiImportPage',batch.batchId,batch.page-1)))),next=button('Next preview page',()=>run('Loading preview…',async()=>accept(await rpc('apiImportPage',batch.batchId,batch.page+1))));
+      previous.dataset.fixedDisabled=String(batch.page===0);next.dataset.fixedDisabled=String((batch.page+1)*50>=batch.total);previous.disabled=busy||batch.page===0;next.disabled=busy||(batch.page+1)*50>=batch.total;
+      append(pager,previous,el('span','','Page '+(batch.page+1)+' of '+Math.ceil(batch.total/50)+' · up to 50 rows'),next);results.append(pager);
+    }
+    const validate=button('Validate mappings and preview',()=>run('Validating rows…',async()=>{
+      if(!batch)throw Error('Choose a CSV first.');const previous=batch.validation?new Set(selected):null;const page=batch.page;accept(await rpc('apiImportValidate',batch.batchId,mappings),true);if(previous)selected=new Set([...selected].filter(i=>previous.has(i)));if(page)accept(await rpc('apiImportPage',batch.batchId,page));else renderPage();mappingDirty=false;
+    }));
+    const check=button('Check saved progress',()=>run('Checking saved progress…',async()=>{
+      const id=batch?.batchId||saved();if(!id)throw Error('Choose the same CSV to find its saved batch.');accept(await rpc('apiImportStatus',id),true);
+    }));
+    const restart=button('Restart preview from chosen CSV',()=>run('Re-staging chosen CSV…',async()=>{if(!sourceCsv)throw Error('Choose the original CSV first.');accept(await rpc('apiImportStage',sourceCsv,true),true);}));
+    const start=button('Import selected rows',()=>run('Preparing import…',async()=>{
+      if(!batch?.validation||mappingDirty)throw Error('Validate mappings first.');
+      if(batch.progress.cursor===0){if(!selected.size)throw Error('Select at least one row.');accept(await rpc('apiImportSelect',batch.batchId,batch.validation,[...selected]),true);}
+      else accept(await rpc('apiImportStatus',batch.batchId),true);
+      running=true;pauseRequested=false;pause.disabled=false;
+      while(batch.state!=='COMPLETED'&&!pauseRequested){status.textContent='Importing · '+batch.progress.cursor+' of '+selected.size+' selected rows processed…';accept(await rpc('apiImportBatchCommit',batch.batchId,batch.validation),true);}
+      if(pauseRequested&&batch.state!=='COMPLETED')accept(await rpc('apiImportPause',batch.batchId),true);
+      if(batch.state==='COMPLETED'){status.textContent='Completed — '+batch.progress.imported+' transactions imported. Review classifications and official balances.';await refresh();}
+    }));
+    const pause=button('Pause after this batch',()=>{pauseRequested=true;status.textContent='Pausing after the current batch…';});pause.disabled=true;
+    file.addEventListener('change',()=>run('Reading CSV…',async()=>{
+      const chosen=file.files[0];if(!chosen)return;if(!/\.csv$/i.test(chosen.name)||chosen.size>1500000)throw Error('Choose a sanitized CSV no larger than 1.5 MB.');
+      const csv=await chosen.text();await new Promise(resolve=>requestAnimationFrame(resolve));
+      const header=csv.replace(/^\uFEFF/,'').split(/\r?\n/,1)[0].split(',').map(s=>s.replace(/^"|"$/g,''));
+      const expected=['Source Hash','Source Row','Bank','Card','Last Four','Billing Cycle','Statement Date','Payment Due Date','Transaction Date','Posting Date','Description','Amount','Source Reference'];
+      if(JSON.stringify(header)!==JSON.stringify(expected))throw Error('CSV headers do not match the sanitizer. Use tools/sanitize_workbook.py.');
+      sourceCsv=csv;status.textContent='Uploading and staging CSV…';accept(await rpc('apiImportStage',csv),true);
+    }));
+    append(box,el('p','','Upload sanitized CSV once, confirm each card and currency, then review 50 rows per page. Suspected duplicates are not selected automatically.'),field('Sanitized CSV',file),status,mappingBox,append(el('div','toolbar'),validate,check,start,pause,restart),results);
+    openDialog('Import transactions',box);
+    $('dialog').addEventListener('close',()=>{pauseRequested=true;},{once:true});
+  }
+  window.addEventListener('error',()=>notice('The interface encountered an error. Refresh or install the matching release files.','error'));
+  window.addEventListener('unhandledrejection',e=>notice(e.reason?.message||'A request failed. Refresh and try again.','error'));
+  action(async()=>{await refresh();const start=document.body.dataset.start;
+    if(start==='review')navigate('Review');
+    if(start==='settings')navigate('Settings and Integration');
+    if(start==='configuration')navigate('Configuration');
+    if(start==='records')navigate('Transactions');
+    if(start==='report'){navigate('Money Owed');showReport();}
+    if(start==='import')showImport();
+  });
+})();
+</script>

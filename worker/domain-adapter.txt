@@ -1,0 +1,24 @@
+platform.initialize(CC_SCHEMA,CC_COMMON);
+CC_BRIDGE_ACTOR=owner.id;
+
+function locked_(fn){if(CC_LOCK_DEPTH)return fn();CC_LOCK_DEPTH++;CC_CONTEXT={tables:{},sheets:{}};try{return fn();}finally{CC_CONTEXT=null;CC_LOCK_DEPTH--;}}
+function guard_(fn){return locked_(()=>{CC_EDIT_ISSUES=[];try{return fn();}catch(error){if(/^(ACCESS_DENIED|VALIDATION|CONFLICT|SCHEMA|SETUP|BUSY|REVIEW|CALENDAR|IMPORT|RECOVERY|LIMIT):/.test(String(error.message)))throw error;throw Error('REVIEW: The operation needs review.');}});}
+function baselineChange_(){return null;}
+function saveBaseline_(){}
+sheetValue_=value=>value??'';
+function diagnostics_(db){return {...legacy_diagnostics_(db),backendRevision:'supabase-20260913-1',storage:'Supabase',triggers:[],snapshotVersion:snapshot.version};}
+const methods={apiIdentity,apiImportLookups,apiResolveMissing,apiBootstrap:billsBootstrap,apiList:billsList,apiSave:billsSave,apiReport,apiRecover,apiInstallmentSchedule,apiSettings,apiImportPreview,apiImportCommit,apiImportStage,apiImportValidate,apiImportPage,apiImportStatus,apiImportSelect,apiImportPause,apiImportBatchCommit,repairSettings,apiPackageCommit,apiPackageReceipt};
+return {
+  call(action,args){if(!Object.hasOwn(methods,action)||!Array.isArray(args)||args.length>8)throw Error('VALIDATION: Unsupported financial operation.');return methods[action](...args);},
+  changes:()=>platform.changes(),properties:()=>platform.properties(),snapshot:()=>platform.snapshot(),
+  inspect:()=>guard_(()=>({schema:CC_SCHEMA,enums:CC_ENUMS,issues:review_(load_()),settings:settings_(load_())})),
+  browse:()=>guard_(()=>{const db=load_();return Object.fromEntries(Object.keys(CC_SCHEMA).filter(e=>!CC_INTERNAL.includes(e)).map(e=>[e,db[e].map(r=>decorate_(e,r,db))]));}),
+  calendarPlans:()=>guard_(()=>{const db=load_(),settings=settings_(db);validateSettings_(settings);ensureRecovered_(db);if(review_(db).some(i=>i.severity==='ERROR'))throw Error('REVIEW: Repair invalid records before synchronization.');return {settings,plans:db.Statements.filter(s=>s.calendarMode!=='OFF'||s.eventId).map(s=>({statement:s,plan:billsEventPlan_(s,db,settings),marker:billsCalendarMarker_(s)}))};}),
+  calendarOwned:(event,s)=>eventOwned_(event,s),
+  writeCalendar:(before,after)=>guard_(()=>write_('Statements',before,after)),
+  integrationWrite:(entity,before,after)=>guard_(()=>write_(entity,before,after)),
+  integrationOperation:(id,kind,payload)=>guard_(()=>{const after=meta_({kind,state:'PENDING',payload:JSON.stringify(payload),error:''},id);write_('Operations',null,after);return after;}),
+  integrationCommit:(changes,id,kind)=>guard_(()=>commit_(load_(),changes,id,kind)),
+  property:(name,value)=>props_().setProperty(name,value),
+  automate:enabled=>{props_().setProperty('DATABASE_AUTOMATION',String(enabled));return {installed:enabled?1:0,stopped:!enabled};}
+};

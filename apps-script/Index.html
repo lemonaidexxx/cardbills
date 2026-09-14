@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Card workspace</title><?!= include_('Styles'); ?></head>
+<body data-start="<?= viewAction ?>">
+  <a class="skip" href="#main">Skip to workspace</a>
+  <div class="app">
+    <aside class="navigation"><div class="brand"><span class="brand-mark">C</span><div><span class="brand-title">Card workspace</span><small>Shared transaction workspace</small></div></div><nav id="nav" aria-label="Work areas"></nav><div class="nav-footer">Shared workspace<br><span>Statements · payments · collections</span></div></aside>
+    <main id="main" tabindex="-1">
+      <header class="page-header"><div><p class="eyebrow">YOUR FINANCIAL WORKSPACE</p><h1 id="title">Overview</h1><p id="subtitle">A clear view of your records.</p></div><button id="refresh" class="secondary">Refresh data</button></header>
+      <div id="notice" role="status" aria-live="polite"></div>
+      <section id="content" aria-label="Workspace content"><div class="empty">Loading workspace…</div></section>
+    </main>
+    <aside id="context" class="context" aria-label="Context and record details"></aside>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"><header class="dialog-header"><h2 id="dialog-title"></h2><button id="close-dialog" type="button" aria-label="Close dialog">Close</button></header><div id="dialog-content"></div><p id="dialog-error" role="alert"></p></dialog>
+  <script>
+  window.addEventListener('error',function(){var n=document.getElementById('notice');if(n)n.textContent='Interface startup failed. Install matching Index, Styles, Client and Code.gs files.';});
+  </script>
+  <?!= include_(viewClient); ?>
+</body>
+</html>

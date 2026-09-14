@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import {fixture} from './backend-fixture.mjs';
+const f=fixture();f.context.setup();
+const save=(e,r)=>f.context.apiSave(e,r,'',crypto.randomUUID()).id;
+const a=save('Accounts',{bank:'Example Bank',nickname:'Everyday account',currency:'PHP',status:'ACTIVE',reviewStatus:'VERIFIED'});
+const c=save('Cards',{accountId:a,product:'Everyday card',nickname:'Everyday card',lastFour:'1111',relationship:'PRIMARY',status:'ACTIVE'});
+for(const [description,amount] of [['Groceries',125050],['Home supplies',45000],['Transport',8500]])save('Transactions',{accountId:a,cardId:c,transactionDate:'2026-09-08',postingDate:'2026-09-09',originalDescription:description,description,amountMinor:amount,currency:'PHP',type:'PURCHASE',reviewStatus:'VERIFIED',status:'ACTIVE'});
+save('Statements',{accountId:a,statementDate:'2026-09-09',dueDate:'2026-09-29',balanceMinor:178550,minimumMinor:10000,currency:'PHP',status:'OPEN',reconciliation:'UNVERIFIED',calendarMode:'OFF'});
+save('People',{name:'Alex',status:'ACTIVE'});
+const boot=f.context.apiBootstrap();
+const lists=Object.fromEntries(['Accounts','Cards','Transactions','Statements','People','Shares','BankPayments','PaymentAllocations','Repayments','InstallmentPlans','SavedViews','Labels','ReportConfig'].map(e=>[e,f.context.apiList(e,{},0,'updatedAt:desc')]));
+console.log(JSON.stringify({boot,lists}));
