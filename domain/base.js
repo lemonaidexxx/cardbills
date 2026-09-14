@@ -1090,9 +1090,9 @@ function validateFilters_(f) {
 
   if(!f||Array.isArray(f)||typeof f!=='object')fail_('VALIDATION: Invalid filters.');
 
-  const allowed=['q','personId','tag','status','requestStatus','settlement','expectedState','from','to','currency','dateBasis','accountId','cardId','statementId','statementDate','transactionId','shareId','type','spending','undated','installmentPlanId'];
+  const allowed=['category','recordId','q','personId','tag','status','requestStatus','settlement','expectedState','from','to','currency','dateBasis','accountId','cardId','statementId','statementDate','transactionId','shareId','type','spending','undated','installmentPlanId'];
 
-  Object.keys(f).forEach(k=>{if(!allowed.includes(k)||typeof f[k]!=='string'||f[k].length>300)fail_('VALIDATION: Invalid filter.');});
+  Object.keys(f).forEach(k=>{if(!allowed.includes(k)||(k==='type'&&Array.isArray(f[k])?f[k].length>30||f[k].some(v=>typeof v!=='string'||!CC_ENUMS['Transactions.type'].includes(v)):typeof f[k]!=='string'||f[k].length>300))fail_('VALIDATION: Invalid filter.');});
 
   if(f.from&&!dateValid_(f.from)||f.to&&!dateValid_(f.to)||f.from&&f.to&&f.from>f.to)fail_('VALIDATION: Invalid filter dates.');
   if(f.statementDate&&!dateValid_(f.statementDate))fail_('VALIDATION: Choose a valid statement date.');
