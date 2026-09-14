@@ -59,3 +59,11 @@ Run these after installing in your accounts:
 15. Inspect actual Worker CPU usage, request counts, Apps Script execution times and provider quotas before enabling routine automation.
 
 Preparation date: 12 September 2026. Live Cloudflare, Supabase and Google account acceptance remains to be completed by the deployment owner.
+
+## Publication validation — 14 September 2026
+
+The supplied release was validated on Windows with Node.js 24.21.0 and pinned Wrangler 4.102.0. Dependency installation completed and `package-lock.json` was generated. All 71 tests passed; `npm run check` and `npx wrangler deploy --dry-run` also passed.
+
+`npm audit` reported four high-severity findings in the Wrangler development dependency tree (Wrangler, Miniflare, sharp, and undici). The release retains its pinned tool version; dependency remediation remains a separate follow-up.
+
+This publication does not verify or activate a private database import. Cloudflare's `DATA_BACKEND` remains unset, preserving the Sheets runtime. Live database migration and Google backup activation remain separate acceptance steps.
