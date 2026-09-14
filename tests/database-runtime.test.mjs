@@ -108,3 +108,13 @@ test('CSV import retains Payment Due Date on the transaction',()=>{
  const mappings={'Example | Card | 0123':{cardId:card,currency:'PHP'}},preview=d.call('apiImportPreview',[csv,mappings]);assert.equal(preview.counts.ACCEPTED,1);
  d.call('apiImportCommit',[csv,mappings,preview.token,[0],randomUUID()]);const imported=d.changes().find(c=>c.entity==='Transactions').after;assert.equal(imported.dueDate,'2026-10-10');assert.equal(imported.amountMinor,2500);
 });
+
+test('sorting applies globally before pagination with numeric values and missing dates last',()=>{
+ const {snapshot}=sample(),seed=snapshot.tables.Transactions[0];snapshot.tables.Transactions=Array.from({length:85},(_,i)=>({...seed,id:'tx-'+String(i).padStart(3,'0'),_slot:i+2,amountMinor:String(85-i),dueDate:i===0?'':'2026-10-01'}));snapshot.tables.SheetBaseline=[];const d=createDomain(snapshot,owner);
+ const first=d.call('apiList',['Transactions',{},0,'amountMinor:asc']),second=d.call('apiList',['Transactions',{},1,'amountMinor:asc']);assert.equal(Number(first.rows[0].amountMinor),1);assert.equal(Number(second.rows[0].amountMinor),41);
+ for(const dir of ['asc','desc']){const last=d.call('apiList',['Transactions',{},2,'dueDate:'+dir]);assert.equal(last.rows.at(-1).id,'tx-000');}
+});
+test('card lookup labels use nicknames and nickname sorting ignores record IDs',()=>{
+ const {snapshot}=sample(),card=snapshot.tables.Cards[0],tx=snapshot.tables.Transactions[0];card.nickname='Zulu';snapshot.tables.Cards.push({...card,id:'zz-card',nickname:'Alpha',_slot:3});snapshot.tables.Transactions.push({...tx,id:'second',cardId:'zz-card',_slot:3});const d=createDomain(snapshot,owner);
+ const boot=d.call('apiBootstrap',[]);assert.equal(boot.lookups.Cards[0].label,'Zulu');assert.equal(boot.lookups.Accounts[0].label,'Preserved account');assert.equal(d.call('apiList',['Transactions',{},0,'cardId:asc']).rows[0].cardId,'zz-card');
+});

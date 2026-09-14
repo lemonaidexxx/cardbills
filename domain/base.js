@@ -1126,7 +1126,7 @@ function filtered_(e,db,f,sort) {
 
     const date=r[basis]||t[basis]||'';return !((f.from&&date<f.from)||(f.to&&date>f.to));
 
-  }).sort((a,b)=>{const x=a[parts[0]],y=b[parts[0]];const c=typeof x==='number'&&typeof y==='number'?x-y:String(x||'').localeCompare(String(y||''));return (parts[1]==='asc'?1:-1)*c||a.id.localeCompare(b.id);});
+  }).sort((a,b)=>{const value=r=>parts[0]==='cardId'?(db.Cards.find(c=>c.id===r.cardId)?.nickname||''):parts[0]==='accountId'?(db.Accounts.find(c=>c.id===r.accountId)?.nickname||''):r[parts[0]];const x=value(a),y=value(b),empty=v=>v===''||v==null;if(empty(x)!==empty(y))return empty(x)?1:-1;const c=/Minor$/.test(parts[0])&&!empty(x)?Number(x)-Number(y):typeof x==='number'&&typeof y==='number'?x-y:String(x??'').localeCompare(String(y??''));return (parts[1]==='asc'?1:-1)*c||a.id.localeCompare(b.id);});
 
 }
 
@@ -1148,7 +1148,7 @@ function lookups_(db) {const out={};['Accounts','Cards','People','Transactions',
 
   const account=db.Accounts.find(a=>a.id===r.accountId);const base=r.nickname||r.name||r.description||r.statementDate||r.date||r.reference||r.id;
 
-  return {id:r.id,label:base+(e==='Cards'&&r.lastFour?' · •••• '+r.lastFour:'')+(['Statements','BankPayments'].includes(e)&&account?' · '+account.nickname:'')+' · '+r.id.slice(-6),currency:r.currency||(account&&account.currency)||'',accountId:r.accountId||'',status:r.status,...(e==='Statements'?{statementDate:r.statementDate}:{}),...(e==='InstallmentPlans'?{cardId:r.cardId,count:Number(r.count)}:{})};
+  return {id:r.id,label:base+(e==='Cards'&&db.Cards.filter(c=>c.nickname===r.nickname).length>1?' · '+(r.lastFour?'•••• '+r.lastFour+' · ':'')+(account?.nickname||''):'')+(['Statements','BankPayments'].includes(e)&&account?' · '+account.nickname:'')+(['Accounts','Cards'].includes(e)?'':' · '+r.id.slice(-6)),currency:r.currency||(account&&account.currency)||'',accountId:r.accountId||'',status:r.status,...(e==='Statements'?{statementDate:r.statementDate}:{}),...(e==='InstallmentPlans'?{cardId:r.cardId,count:Number(r.count)}:{})};
 
 }));return out;}
 

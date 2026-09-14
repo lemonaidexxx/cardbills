@@ -19,3 +19,5 @@ test('obsolete queued reads are skipped and failures release the queue',async()=
  let finish,keep=true;const calls=[];const call=client(payload=>{const name=JSON.parse(payload).action;calls.push(name);return name==='apiSave'?new Promise(resolve=>finish=resolve):Promise.reject(Error('failed'));});
  const save=call('apiSave'),stale=call('apiList',[],()=>keep);keep=false;finish();await save;assert.equal(await stale,null);assert.deepEqual(calls,['apiSave']);await assert.rejects(call('apiBootstrap'),/failed/);await assert.rejects(call('apiList'),/failed/);
 });
+
+test('due countdown uses calendar dates and distinguishes unpaid overdue dates',()=>{const c=vm.createContext({});vm.runInContext(source,c);assert.equal(c.statementDueLabel('2027-01-01','2026-12-31'),'Due in 1 day');assert.equal(c.statementDueLabel('2026-03-01','2026-02-27'),'Due in 2 days');assert.equal(c.statementDueLabel('2026-09-14','2026-09-14'),'Due today');assert.equal(c.statementDueLabel('2026-09-13','2026-09-14'),'Past due');});
