@@ -9,7 +9,9 @@ for(const [description,amount] of [['Groceries',125050],['Home supplies',45000],
 save('Statements',{accountId:a,statementDate:'2026-09-09',dueDate:'2026-09-29',balanceMinor:178550,minimumMinor:10000,currency:'PHP',status:'OPEN',reconciliation:'UNVERIFIED',calendarMode:'OFF'});
 save('People',{name:'Alex',status:'ACTIVE'});
 const tables={};for(const [name,sheet]of f.sheets){const [columns,...rows]=sheet.data;tables[name.slice(3)]=rows.flatMap((r,i)=>r?.some(v=>v!=='')?[{...Object.fromEntries(columns.map((c,j)=>[c,r[j]??''])),_slot:i+2}]:[]);}
+tables.Transactions.push({...tables.Transactions[0],id:'duplicate-browser-tx',_slot:99});
 const owner={id:'11111111-1111-4111-8111-111111111111',email:'owner@example.test'},domain=createDomain({ownerId:owner.id,sourceSheetId:'synthetic-workbook',version:1,properties:{},tables},owner);
+
 const boot=domain.call('apiBootstrap',[]);
-const lists=Object.fromEntries(['Accounts','Cards','Transactions','Statements','People','Shares','BankPayments','PaymentAllocations','Repayments','InstallmentPlans','SavedViews','Labels','ReportConfig'].map(e=>[e,domain.call('apiList',[e,{},0,'updatedAt:desc'])]));
+const lists=Object.fromEntries(['DuplicateReview','Accounts','Cards','Transactions','Statements','People','Shares','BankPayments','PaymentAllocations','Repayments','InstallmentPlans','SavedViews','Labels','ReportConfig'].map(e=>[e,domain.call('apiList',[e,{},0,'updatedAt:desc'])]));
 console.log(JSON.stringify({boot,lists}));

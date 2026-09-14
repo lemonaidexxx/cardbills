@@ -36,7 +36,7 @@ function billsListView_(db,issues,entity,filters,page,sort) {
 }
 
 function billsList(entity,filters,page,sort) {
-  return guard_(()=>{const db=load_();return billsListView_(db,review_(db),entity,filters,page,sort);},true);
+  return guard_(()=>{const db=load_();if(entity==='DuplicateReview')return billsDuplicates_(db,page);return billsListView_(db,review_(db),entity,filters,page,sort);},true);
 }
 
 function billsChanged_(db,changes,opId,kind) {
@@ -54,6 +54,7 @@ function billsResult_(db,entity,id,replayed) {
 }
 
 function billsSave(entity,input,expectedToken,requestId) {
+  if(entity==='DuplicateResolution')return billsResolveDuplicate_(input,requestId);
   if(entity==='InstallmentLinks')return billsSaveInstallmentLinks_(input,requestId);
   if(entity==='TransactionReviewBatch')return billsSaveReviewBatch_(input,requestId);
   if(!['TransactionReview','StatementPayment','TagOption'].includes(entity))return apiSave(entity,input,expectedToken,requestId);
@@ -289,3 +290,19 @@ function billsSaveReviewBatch_(input,requestId) {
     return billsReviewBatchResult_(load_(),items,input.includeSummary,false);
   },true);
 }
+
+function duplicateKey_(r){return JSON.stringify([r.accountId,r.cardId||'',r.currency,Number(r.amountMinor),r.transactionDate,String(r.description||'').trim().replace(/\s+/g,' ').toLowerCase()]);}
+function duplicateFingerprint_(rows){return hash_(JSON.stringify(rows.slice().sort((a,b)=>a.id.localeCompare(b.id)).map(r=>[r.id,token_(r)])));}
+function duplicateBlockers_(db,rows){const reasons=[];for(const r of rows){if(db.Shares.some(s=>s.transactionId===r.id))reasons.push('Linked share or repayment: '+r.id);if(db.BankPayments.some(p=>p.matchedTransactionId===r.id))reasons.push('Linked bank payment: '+r.id);if(r.installmentPlanId||db.InstallmentPlans.some(p=>p.originTransactionId===r.id))reasons.push('Linked installment plan: '+r.id);}if(rows[0].statementId!==rows[1].statementId)reasons.push('Different statement links require reconciliation.');return reasons;}
+function billsDuplicates_(db,page){const groups=new Map(),kept=new Set(JSON.parse(props_().getProperty('DUPLICATE_KEEP')||'[]'));for(const r of db.Transactions.filter(r=>r.status==='ACTIVE').sort((a,b)=>a.id.localeCompare(b.id))){const key=duplicateKey_(r);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r);}const p=Math.max(0,Math.floor(Number(page)||0)),rows=[];let total=0;for(const group of groups.values())for(let i=0;i<group.length;i++)for(let j=i+1;j<group.length;j++){const pair=[group[i],group[j]],fingerprint=duplicateFingerprint_(pair);if(kept.has(fingerprint))continue;if(total>=p*20&&rows.length<20)rows.push({fingerprint,records:pair.map(r=>decorate_('Transactions',r,db)),blockers:duplicateBlockers_(db,pair)});total++;}return {rows,total,page:p};}
+function billsResolveDuplicate_(input,requestId){return guard_(()=>{
+ if(!input||!['keep','merge'].includes(input.mode)||!Array.isArray(input.ids)||input.ids.length!==2||input.ids[0]===input.ids[1])fail_('VALIDATION: Choose two duplicate candidates.');
+ const db=load_(),opId=validRequest_(requestId),kind='DUPLICATE_'+input.mode.toUpperCase()+'_'+hash_(JSON.stringify(input)),prior=db.Operations.find(o=>o.id===opId);
+ if(prior){if(prior.kind!==kind||prior.state!=='DONE')fail_('CONFLICT: Retry the original duplicate decision.');return {replayed:true};}
+ ensureRecovered_(db);const rows=input.ids.map(id=>db.Transactions.find(r=>r.id===id));if(rows.some(r=>!r||r.status!=='ACTIVE')||duplicateKey_(rows[0])!==duplicateKey_(rows[1])||duplicateFingerprint_(rows)!==input.fingerprint)fail_('CONFLICT: These records changed. Refresh duplicate review.');
+ if(input.mode==='keep'){const kept=JSON.parse(props_().getProperty('DUPLICATE_KEEP')||'[]');if(!kept.includes(input.fingerprint))kept.push(input.fingerprint);if(kept.length>400)fail_('LIMIT: Duplicate decision storage needs review before adding more decisions.');commit_(db,[],opId,kind);props_().setProperty('DUPLICATE_KEEP',JSON.stringify(kept));return {kept:true};}
+ if(input.confirmed!==true)fail_('VALIDATION: Confirm the merge first.');const blockers=duplicateBlockers_(db,rows);if(blockers.length)fail_('VALIDATION: '+blockers.join(' '));
+ const survivor=rows.find(r=>r.id===input.survivorId),duplicate=rows.find(r=>r.id!==input.survivorId);if(!survivor)fail_('VALIDATION: Choose the surviving record.');
+ const allowed=['description','originalDescription','postingDate','dueDate','type','category','tags','notes','reviewStatus'];if(!input.fields||Array.isArray(input.fields)||Object.keys(input.fields).some(k=>!allowed.includes(k)))fail_('VALIDATION: Unsupported merge fields.');
+ const after=prepare_('Transactions',input.fields,survivor),voided=prepare_('Transactions',{status:'VOID'},duplicate);billsChanged_(db,[{entity:'Transactions',before:survivor,after},{entity:'Transactions',before:duplicate,after:voided}],opId,kind);return billsResult_(load_(),'Transactions',survivor.id,false);
+},true);}
