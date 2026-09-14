@@ -10,7 +10,7 @@ create table if not exists public.bb_workspaces (
 );
 create table if not exists public.bb_records (
  owner_id uuid not null references public.bb_workspaces(owner_id),
- entity text not null check(entity in ('Loans','LoanSchedules','LoanPayments','LoanAllocations','Accounts','Cards','Transactions','Statements','BankPayments','PaymentAllocations','People','Shares','Repayments','InstallmentPlans','SavedViews','Settings','Labels','ReportConfig','SheetBaseline','ImportBatches','ImportRows','ImportHistory','AuditHistory','Operations')),
+ entity text not null check(entity in ('LoanCalendar','Loans','LoanSchedules','LoanPayments','LoanAllocations','Accounts','Cards','Transactions','Statements','BankPayments','PaymentAllocations','People','Shares','Repayments','InstallmentPlans','SavedViews','Settings','Labels','ReportConfig','SheetBaseline','ImportBatches','ImportRows','ImportHistory','AuditHistory','Operations')),
  id text not null check(length(id) between 1 and 120),
  slot integer not null check(slot between 2 and 100002),
  data jsonb not null check(jsonb_typeof(data)='object' and data->>'id'=id and octet_length(data::text)<=100000),
@@ -105,7 +105,7 @@ begin
  for c in select value from jsonb_array_elements(p_changes) loop
   ent:=c->>'entity';pos:=(c->>'slot')::integer;b:=nullif(c->'before','null'::jsonb);a:=nullif(c->'after','null'::jsonb);
   if ent is null or pos is null or pos<2 then raise exception 'VALIDATION: Invalid record position.';end if;
-  if p_mode='automation' and (ent<>'Statements' or b is null or a is null or (a-array['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','revision','updatedAt']) is distinct from (b-array['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','revision','updatedAt'])) then raise exception 'ACCESS_DENIED: Invalid synchronization change.' using errcode='42501';end if;
+  if p_mode='automation' and (ent not in ('Statements','LoanCalendar') or (ent='Statements' and (b is null or a is null or (a-array['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','revision','updatedAt']) is distinct from (b-array['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','revision','updatedAt'])) )) then raise exception 'ACCESS_DENIED: Invalid synchronization change.' using errcode='42501';end if;
   if a is null and ent<>'ImportRows' then raise exception 'VALIDATION: Financial history must be retained.';end if;
   if b is not null then
    rid:=b->>'id';select data into existing from public.bb_records where owner_id=p_owner and entity=ent and id=rid and slot=pos;

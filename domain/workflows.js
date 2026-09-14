@@ -162,8 +162,8 @@ function billsCalendarMarker_(s) {
 
 function billsEventPlan_(s,db,settings) {
   const p=eventPlan_(s,db,settings),past=s.dueDate<today_(db);
-  p.body.summary=p.body.summary.replace(/^Card payment/, 'BillsBills');
-  p.body.description='Statement due-date record. Payment status is maintained in BillsBills.\n'+billsCalendarMarker_(s);
+  p.body.summary=p.body.summary.replace(/^Card payment/, 'BillBills · Card payment');
+  p.body.description='Statement due-date record. Payment status is maintained in BillBills.\n'+billsCalendarMarker_(s);
   p.body.visibility='private';p.body.transparency='transparent';
   if(past)p.body.reminders={useDefault:false,overrides:[]};
   p.skip=!s.eventId&&(s.calendarMode!=='ON'||s.status==='ARCHIVED'||past&&settings.IncludeHistorical!=='true');
@@ -332,10 +332,10 @@ function billsLoanList_(db,entity,f,page,sort){
  if(loan.status==='ACTIVE'){const t=totals[loan.currency]||(totals[loan.currency]={remaining:0,overdue:0,unknown:0});t.remaining+=known;t.unknown+=unknown;t.overdue+=installments.filter(i=>i.dueDate<today).reduce((sum,i)=>sum+(i.remainingMinor||0),0);}
  return {...loan,_token:token_(loan),nextDueDate:next?.dueDate||'',nextRemainingMinor:next?.remainingMinor??null,nextStatus:next?.status||'',scheduledRemainingMinor:known,unknownInstallments:unknown};
  });
- if(entity==='UpcomingLoans')rows=rows.filter(r=>r.status==='ACTIVE'&&r.nextDueDate);
+ if(entity==='UpcomingLoans'){rows=rows.filter(r=>r.status==='ACTIVE').flatMap(r=>{const unpaid=loanInstallments_(db,r).filter(i=>i.remainingMinor===null||i.remainingMinor>0),next=unpaid.find(i=>i.dueDate>=today);return unpaid.filter(i=>i.dueDate<today||i===next).map(i=>({...r,loanId:r.id,installmentNumber:i.number,nextDueDate:i.dueDate,nextRemainingMinor:i.remainingMinor,nextStatus:i.status}));});}
  const q=String(f.q||'').trim().toLowerCase();rows=rows.filter(r=>(!q||(r.nickname+' '+r.lender+' '+(r.notes||'')).toLowerCase().includes(q))&&(!f.currency||r.currency===f.currency)&&(!f.status||r.status===f.status));
  const [field,direction]=String(sort||(entity==='UpcomingLoans'?'nextDueDate:asc':'nickname:asc')).split(':'),allowed=['nickname','lender','currency','nextDueDate','scheduledRemainingMinor','termMonths','status','notes'],key=allowed.includes(field)?field:'nickname';
- rows.sort((a,b)=>{const x=a[key],y=b[key],xm=x==null||x==='',ym=y==null||y==='';if(xm!==ym)return xm?1:-1;const n=['scheduledRemainingMinor','termMonths'].includes(key)?Number(x)-Number(y):String(x||'').localeCompare(String(y||''));return n*(direction==='desc'?-1:1)||a.id.localeCompare(b.id);});
+ rows.sort((a,b)=>{const x=a[key],y=b[key],xm=x==null||x==='',ym=y==null||y==='';if(xm!==ym)return xm?1:-1;const n=['scheduledRemainingMinor','termMonths'].includes(key)?Number(x)-Number(y):String(x||'').localeCompare(String(y||''));return n*(direction==='desc'?-1:1)||(entity==='UpcomingLoans'?a.nickname.localeCompare(b.nickname)||a.installmentNumber-b.installmentNumber:0)||a.id.localeCompare(b.id);});
  const p=Math.min(Math.max(0,Math.floor(Number(page)||0)),Math.max(0,Math.ceil(rows.length/40)-1));return {rows:rows.slice(p*40,p*40+40),total:rows.length,page:p,issues:[],loanTotals:totals};
 }
 function loanDashboard_(db,f){const loans=db.Loans.filter(l=>!f.loanId||l.id===f.loanId);return {loans:loans.map(l=>({...l,_token:token_(l),installments:loanInstallments_(db,l)})),schedules:db.LoanSchedules.filter(s=>!f.loanId||s.loanId===f.loanId).map(s=>({...s,_token:token_(s)})),payments:db.LoanPayments.filter(p=>!f.loanId||p.loanId===f.loanId).map(p=>({...p,_token:token_(p),allocations:db.LoanAllocations.filter(a=>a.loanPaymentId===p.id)}))};}
@@ -380,3 +380,18 @@ function billsLedgerAction_(entity,input,expectedToken,requestId){return guard_(
  if(entity==='ShareBatch'){const tx=db.Transactions.find(t=>t.id===input.transactionId);if(!tx||token_(tx)!==expectedToken)fail_('CONFLICT: Transaction changed.');if(!Array.isArray(input.items)||!input.items.length||input.items.length>30)fail_('VALIDATION: Provide 1 to 30 shares.');const seen=new Set();for(const item of input.items){if(item.id&&seen.has(item.id))fail_('VALIDATION: Duplicate share.');if(item.id)seen.add(item.id);const before=item.id?db.Shares.find(s=>s.id===item.id&&s.transactionId===tx.id):null;if(item.id&&(!before||token_(before)!==item.token))fail_('CONFLICT: A share changed.');if(before&&before.personId!==item.personId&&db.Repayments.some(r=>r.shareId===before.id&&r.status!=='REVERSED'))fail_('VALIDATION: Shares with repayments cannot be reassigned to another person.');changes.push({entity:'Shares',before,after:prepare_('Shares',{transactionId:tx.id,personId:item.personId,amountMinor:item.amountMinor,currency:tx.currency,status:'ACTIVE',requestStatus:before?.requestStatus||'NOT_REQUESTED',notes:before?.notes||''},before)});}}
  if(!changes.length)fail_('VALIDATION: No changes.');if(JSON.stringify(changes).length>44000)fail_('LIMIT: Save fewer items.');billsChanged_(db,changes,opId,kind);return {saved:true,id:changes[0].after.id};
 },true);}
+
+function billsLoanCalendarPlans_(db,settings){
+ const out=[],seen=new Set(),cal=settings.CalendarId;
+ for(const loan of db.Loans){for(const i of loanInstallments_(db,loan)){
+  const found=db.LoanCalendar.find(r=>r.loanId===loan.id&&Number(r.installmentNumber)===i.number&&r.calendarId===cal),id=found?.id||hash_('loan|'+loan.id+'|'+i.number+'|'+cal).slice(0,40);
+  const record=found||{id,revision:0,createdAt:now_(),updatedAt:now_(),loanId:loan.id,installmentNumber:i.number,dueDate:i.dueDate,calendarId:cal,eventId:'',syncedAt:'',fingerprint:'',syncError:'',attempts:0,nextRetry:''};seen.add(id);
+  const disabled=loan.status!=='ACTIVE'||i.remainingMinor===0||i.remainingMinor===null;
+  if(disabled&&!found){if(i.remainingMinor===null&&loan.status==='ACTIVE')out.push({entity:'LoanCalendar',statement:record,plan:{skip:true,reason:'Amount not set'},label:loan.nickname});continue;}
+  const dueDate=i.dueDate,start=localInstant_(dueDate,normalizeTime_(settings.ReminderTime,settings.Timezone),settings.Timezone),marker='BillBills loan link: '+id;
+  const body={summary:'BillBills · Loan payment · '+loan.nickname+' · '+i.number+' of '+loan.termMonths+(i.remainingMinor===0?' · Paid':loan.status!=='ACTIVE'?' · Inactive':i.remainingMinor===null?' · Amount not set':'')+(settings.ShowAmounts==='true'&&i.remainingMinor!==null?' · '+formatMoney_(i.remainingMinor,loan.currency)+' '+loan.currency:''),description:'Loan payment record. Status is maintained in BillBills.\n'+marker,start:{dateTime:start.toISOString(),timeZone:settings.Timezone},end:{dateTime:new Date(start.getTime()+900000).toISOString(),timeZone:settings.Timezone},visibility:'private',transparency:'transparent',reminders:{useDefault:false,overrides:disabled||dueDate<today_(db)?[]:String(settings.ReminderMinutes).split(',').map(m=>({method:'popup',minutes:Number(m)}))},extendedProperties:{private:{bbLoan:id,ccWorkspace:hash_(props_().getProperty('SPREADSHEET_ID')).slice(0,32)}}};
+  out.push({entity:'LoanCalendar',statement:record,marker,label:loan.nickname,plan:{cal,id:record.eventId||eventId_(id,cal),body,fingerprint:hash_(JSON.stringify(body)),disabled,dueDate}});
+ }}
+ for(const record of db.LoanCalendar.filter(r=>r.calendarId===cal&&!seen.has(r.id)&&r.eventId)){const start=localInstant_(record.dueDate,normalizeTime_(settings.ReminderTime,settings.Timezone),settings.Timezone),marker='BillBills loan link: '+record.id,body={summary:'BillBills · Loan payment · Retired · '+record.installmentNumber,description:'This scheduled installment is no longer active.\n'+marker,reminders:{useDefault:false,overrides:[]},extendedProperties:{private:{bbLoan:record.id,ccWorkspace:hash_(props_().getProperty('SPREADSHEET_ID')).slice(0,32)}}};out.push({entity:'LoanCalendar',statement:record,marker,plan:{cal,id:record.eventId,body,fingerprint:hash_(JSON.stringify(body)),disabled:true,dueDate:record.dueDate}});}
+ return out;
+}

@@ -3,9 +3,9 @@ import {createDomain} from './domain.generated.mjs';
 import {databaseRpc,DatabaseError} from './database.mjs';
 import {googleAction,runGoogleAutomation,backupSheet,backupDue} from './google.mjs';
 
-export const FINANCIAL_REVISION='billbills-20260914-17';
+export const FINANCIAL_REVISION='billbills-20260915-18';
 const readActions=new Set(['apiIdentity','apiBootstrap','apiList','apiImportLookups','apiPackageReceipt','apiInstallmentSchedule','apiReport','apiImportPreview','apiImportPage','apiImportStatus','apiSyncPreview','apiCalendars','apiCalendarTest','apiSyncStatus','apiExportDatabase','apiCalendarMigrationPreview']);
-const googleActions=new Set(['apiBackup','apiCalendarTest','apiCalendars','apiCreateCalendar','apiSync','apiSyncPreview','apiCalendarMigrationPreview','apiCalendarMigrate','apiActivateIntegrations','apiEnableSheetBackups']);
+const googleActions=new Set(['apiBackup','apiCalendarTest','apiCalendars','apiCreateCalendar','apiSync','apiSyncPreview','apiCalendarMigrationPreview','apiCalendarMigrate','apiActivateIntegrations','apiEnableSheetBackups','apiEnableCalendarSync']);
 const explicitIds={apiSave:3,apiSettings:2,apiPackageCommit:1,apiResolveMissing:3,apiImportCommit:4,apiCalendarMigrate:2};
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const reply=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
@@ -65,7 +65,7 @@ export class BillsBillsEngine {
     const domain=createDomain(snapshot,{id:session.user.id,email:session.user.email||env.OWNER_EMAIL});
     let result;
     if(action==='apiExportDatabase')result={format:'billsbills-supabase-backup-v1',ownerEmail:env.OWNER_EMAIL,sourceSheetId:snapshot.sourceSheetId,version:snapshot.version,properties:snapshot.properties,tables:snapshot.tables,exportedAt:new Date().toISOString()};
-    else if(action==='apiSyncStatus')result={databaseRevision:FINANCIAL_REVISION,version:snapshot.version,googleConfigured:!!env.GOOGLE_SERVICE_ACCOUNT_JSON,lastSync:snapshot.properties.LAST_SYNC||'',lastBackup:snapshot.properties.LAST_BACKUP||'',lastBackupVersion:snapshot.properties.LAST_BACKUP_VERSION||'',backupError:snapshot.properties.BACKUP_ERROR||'',backupRunning:!!this.backupJob};
+    else if(action==='apiSyncStatus')result={databaseRevision:FINANCIAL_REVISION,version:snapshot.version,googleConfigured:!!env.GOOGLE_SERVICE_ACCOUNT_JSON,lastSync:snapshot.properties.LAST_SYNC||'',lastBackup:snapshot.properties.LAST_BACKUP||'',lastBackupVersion:snapshot.properties.LAST_BACKUP_VERSION||'',backupError:snapshot.properties.BACKUP_ERROR||'',backupRunning:!!this.backupJob,calendarEntities:['Statements','LoanCalendar'].map(entity=>({entity,linked:(snapshot.tables[entity]||[]).filter(r=>r.eventId).length,failed:(snapshot.tables[entity]||[]).filter(r=>r.syncError).length}))};
     else if(action==='installTriggers'||action==='stopAutomation')result=domain.automate(action==='installTriggers');
     else if(action==='apiRecover'&&(snapshot.tables.Operations||[]).some(o=>o.id===args[0]&&o.kind==='DATABASE_CALENDAR_MIGRATION'))result=await googleAction(env,domain,snapshot,'apiCalendarRecover',args);
     else if(googleActions.has(action))result=await googleAction(env,domain,snapshot,action,args);

@@ -31,7 +31,7 @@ async function findLinked(env,cal,marker){let token='',found=[];do{const q=new U
 export async function syncCalendar(env,domain,snapshot,force=true){
  const {settings,plans}=domain.calendarPlans();if(settings.SyncEnabled!=='true')return {processed:0,failed:0,remaining:0,message:'Synchronization is disabled.'};
  let processed=0,failed=0,remaining=0;const deadline=Date.now()+18000;
- for(const {statement:s,plan:p,marker}of plans){
+ for(const {statement:s,plan:p,marker,entity='Statements'}of plans){
   if(p.skip)continue;if(!force&&s.nextRetry&&Date.parse(s.nextRetry)>Date.now()){remaining++;continue;}if(s.eventId&&s.fingerprint===p.fingerprint&&!s.syncError&&Date.now()-Date.parse(s.syncedAt||'1970-01-01')<86400000)continue;
   if(processed+failed>=4||Date.now()>deadline){remaining++;continue;}
   try{
@@ -43,8 +43,8 @@ export async function syncCalendar(env,domain,snapshot,force=true){
     try{await call(env,'calendar','calendars/'+encodeURIComponent(p.cal)+'/events?sendUpdates=none','POST',{id:p.id,...p.body});}
     catch(error){if(error.googleStatus!==409)throw error;const recovered=await call(env,'calendar',eventPath(p.cal,p.id));if(!domain.calendarOwned(recovered,s))throw error;await call(env,'calendar',eventPath(p.cal,p.id)+'?sendUpdates=none','PATCH',p.body);}
    }
-   const now=new Date().toISOString();domain.writeCalendar(s,{...s,calendarId:p.cal,eventId:p.id,syncedAt:now,fingerprint:p.fingerprint,syncError:'',attempts:0,nextRetry:'',revision:Number(s.revision)+1,updatedAt:now});processed++;
-  }catch{failed++;domain.writeCalendar(s,{...s,syncError:'Calendar synchronization needs review.',attempts:Number(s.attempts||0)+1,nextRetry:new Date(Date.now()+120000).toISOString()});}
+   const now=new Date().toISOString();domain.writeCalendar(s,{...s,calendarId:p.cal,eventId:p.id,syncedAt:now,fingerprint:p.fingerprint,syncError:'',attempts:0,nextRetry:'',dueDate:p.dueDate||s.dueDate,revision:Number(s.revision)+1,updatedAt:now},entity);processed++;
+  }catch{failed++;domain.writeCalendar(s,{...s,syncError:'Calendar synchronization needs review.',attempts:Number(s.attempts||0)+1,nextRetry:new Date(Date.now()+120000).toISOString(),revision:Number(s.revision)+1,updatedAt:new Date().toISOString()},entity);}
  }
  domain.property('LAST_SYNC',new Date().toISOString());return {processed,failed,remaining,message:failed?'Some Calendar entries need review.':remaining?'More entries remain in the synchronization queue.':'Calendar synchronization completed.'};
 }
@@ -53,7 +53,7 @@ export async function backupSheet(env,domain,snapshot){
  const metadata=await call(env,'sheets','spreadsheets/'+encodeURIComponent(id)+'?fields=sheets.properties');if(!metadata)throw Error('SETUP: The backup spreadsheet is unavailable.');
  const tables=domain.snapshot(),schema=domain.inspect().schema,requests=[];let nextSheetId=Math.max(0,...metadata.sheets.map(s=>s.properties.sheetId))+1;
  for(const [entity,rows]of Object.entries(tables)){
-  const name='CC_'+entity;let match=metadata.sheets.find(s=>s.properties.title===name);if(!match&&['Loans','LoanSchedules','LoanPayments','LoanAllocations'].includes(entity)){const properties={sheetId:nextSheetId++,title:name,gridProperties:{rowCount:1000,columnCount:30}};requests.push({addSheet:{properties}});match={properties};}if(!match)throw Error('SCHEMA: Backup table '+name+' is missing.');
+  const name='CC_'+entity;let match=metadata.sheets.find(s=>s.properties.title===name);if(!match&&['LoanCalendar','Loans','LoanSchedules','LoanPayments','LoanAllocations'].includes(entity)){const properties={sheetId:nextSheetId++,title:name,gridProperties:{rowCount:1000,columnCount:30}};requests.push({addSheet:{properties}});match={properties};}if(!match)throw Error('SCHEMA: Backup table '+name+' is missing.');
   const properties=match.properties,headers=['id','revision','createdAt','updatedAt',...schema[entity].split(' ')],last=Math.max(1,...rows.map((r,i)=>r._slot||i+2));
   if(properties.gridProperties.rowCount<last||properties.gridProperties.columnCount<headers.length)requests.push({updateSheetProperties:{properties:{sheetId:properties.sheetId,gridProperties:{rowCount:Math.max(last,properties.gridProperties.rowCount),columnCount:Math.max(headers.length,properties.gridProperties.columnCount)}},fields:'gridProperties.rowCount,gridProperties.columnCount'}});
   const cells=Array.from({length:Math.max(last,properties.gridProperties.rowCount)},()=>({values:headers.map(()=>({}))}));
@@ -65,18 +65,19 @@ export async function backupSheet(env,domain,snapshot){
  domain.property('LAST_BACKUP',new Date().toISOString());domain.property('LAST_BACKUP_VERSION',String(snapshot.version));domain.property('BACKUP_ERROR','');return {id,message:'Daily backup completed.',databaseVersion:snapshot.version};
 }
 export async function googleAction(env,domain,snapshot,action,args){
- if(action==='apiSyncPreview'){const {plans}=domain.calendarPlans();return plans.map(({statement:s,plan:p})=>({id:s.id,dueDate:s.dueDate,action:p.skip?'SKIP':p.disabled?'HISTORY / SILENT':s.eventId?'UPDATE':'CREATE / LINK'}));}
+ if(action==='apiSyncPreview'){const {plans}=domain.calendarPlans();return plans.map(({statement:s,plan:p,entity='Statements',label})=>({id:s.id,entity,label:label||'',dueDate:p.dueDate||s.dueDate,action:p.skip?(p.reason||'SKIP'):p.disabled?'HISTORY / SILENT':s.eventId?'UPDATE':'CREATE / LINK'}));}
  if(action==='apiBackup')return backupSheet(env,domain,snapshot);
  if(action==='apiSync')return syncCalendar(env,domain,snapshot);
  const settings=domain.inspect().settings;
+ if(action==='apiEnableCalendarSync')return enableCalendarSync(env,domain,snapshot);
  if(action==='apiActivateIntegrations')return activateIntegrations(env,domain,snapshot);
  if(action==='apiEnableSheetBackups')return activateSheetBackups(env,domain,snapshot);
  if(action==='apiCalendarTest'){const c=await call(env,'calendar','calendars/'+encodeURIComponent(settings.CalendarId));if(!c)throw Error('CALENDAR: Share the selected calendar with the Google service account.');return {connected:true,timeZone:c.timeZone};}
  if(action==='apiCalendars'){const c=await call(env,'calendar','calendars/'+encodeURIComponent(settings.CalendarId||env.OWNER_EMAIL));return c?[{id:c.id,label:c.summary||c.id}]:[];}
- if(action==='apiCreateCalendar'){const c=await call(env,'calendar','calendars','POST',{summary:'BillsBills reminders',timeZone:settings.Timezone});await call(env,'calendar','calendars/'+encodeURIComponent(c.id)+'/acl?sendNotifications=false','POST',{role:'owner',scope:{type:'user',value:env.OWNER_EMAIL}});return {id:c.id,label:c.summary};}
+ if(action==='apiCreateCalendar'){const c=await call(env,'calendar','calendars','POST',{summary:'BillBills reminders',timeZone:settings.Timezone});await call(env,'calendar','calendars/'+encodeURIComponent(c.id)+'/acl?sendNotifications=false','POST',{role:'owner',scope:{type:'user',value:env.OWNER_EMAIL}});return {id:c.id,label:c.summary};}
  if(action==='apiCalendarMigrationPreview'){
   const target=String(args[0]||'');if(!target||target.length>300)throw Error('VALIDATION: Choose a calendar.');const c=await call(env,'calendar','calendars/'+encodeURIComponent(target));if(!c)throw Error('CALENDAR: Target calendar is unavailable.');
-  return {target,token:hash(JSON.stringify({target,version:snapshot.version,old:settings.CalendarId})),eventsToRetire:(snapshot.tables.Statements||[]).filter(s=>s.eventId).length,message:'Move future synchronization to '+(c.summary||target)+'. Existing linked events will be retained with reminders disabled.'};
+  return {target,token:hash(JSON.stringify({target,version:snapshot.version,old:settings.CalendarId})),eventsToRetire:['Statements','LoanCalendar'].reduce((n,e)=>n+(snapshot.tables[e]||[]).filter(s=>s.eventId&&(!s.calendarId||s.calendarId===settings.CalendarId)).length,0),message:'Move future synchronization to '+(c.summary||target)+'. Existing linked events will be retained with reminders disabled.'};
  }
  if(action==='apiCalendarMigrate')return beginCalendarMigration(env,domain,snapshot,args);
  if(action==='apiCalendarRecover')return resumeCalendarMigration(env,domain,snapshot,args[0]);
@@ -115,7 +116,7 @@ async function beginCalendarMigration(env,domain,snapshot,args){
  if((snapshot.tables.Operations||[]).some(o=>!['DONE','CANCELLED'].includes(o.state)))throw Error('RECOVERY: Resolve the pending operation first.');
  if(target===settings.CalendarId)return {changed:false};
  const destination=await call(env,'calendar','calendars/'+encodeURIComponent(target));if(!destination)throw Error('CALENDAR: Target calendar is unavailable.');
- const operation=domain.integrationOperation(id,'DATABASE_CALENDAR_MIGRATION',{target,old:settings.CalendarId,remaining:(snapshot.tables.Statements||[]).filter(s=>s.eventId).map(s=>s.id)});
+ const operation=domain.integrationOperation(id,'DATABASE_CALENDAR_MIGRATION',{target,old:settings.CalendarId,remaining:['Statements','LoanCalendar'].flatMap(entity=>(snapshot.tables[entity]||[]).filter(s=>s.eventId&&(!s.calendarId||s.calendarId===settings.CalendarId)).map(s=>({entity,id:s.id})))});
  return {pending:true,id:operation.id,message:'Calendar migration is prepared. Use Resume in Diagnostics and recovery.'};
 }
 async function resumeCalendarMigration(env,domain,snapshot,id){
@@ -123,7 +124,7 @@ async function resumeCalendarMigration(env,domain,snapshot,id){
  const before={...operation};delete before._slot;
  const payload=JSON.parse(before.payload),remaining=[...payload.remaining];let processed=0;
  for(const statementId of remaining.slice(0,4)){
-  const s=(snapshot.tables.Statements||[]).find(s=>s.id===statementId);if(!s)throw Error('CALENDAR: Linked statement is missing.');
+  const entity=typeof statementId==='string'?'Statements':statementId.entity;const s=(snapshot.tables[entity]||[]).find(s=>s.id===(typeof statementId==='string'?statementId:statementId.id));if(!s)throw Error('CALENDAR: Linked statement is missing.');
   const event=await call(env,'calendar',eventPath(s.calendarId||payload.old,s.eventId));
   if(event){if(!domain.calendarOwned(event,s)||(event.attendees||[]).length)throw Error('CALENDAR: Event ownership requires review.');await call(env,'calendar',eventPath(s.calendarId||payload.old,s.eventId)+'?sendUpdates=none','PATCH',{reminders:{useDefault:false,overrides:[]}});}
   remaining.shift();processed++;
@@ -153,4 +154,15 @@ async function activateIntegrations(env,domain,snapshot){
  if(changes.length)domain.integrationCommit(changes,crypto.randomUUID(),'ENABLE_INTEGRATIONS');
  domain.property('DATABASE_AUTOMATION','true');
  return {enabled:true,calendar:target,backupSheet:snapshot.sourceSheetId,message:'Calendar and scheduled Sheet backups enabled.'};
+}
+
+async function enableCalendarSync(env,domain,snapshot){
+ const settings=domain.inspect().settings,target=settings.CalendarId;
+ if(!target)throw Error('CALENDAR: Select and share a calendar first.');
+ const calendar=await call(env,'calendar','calendars/'+encodeURIComponent(target));if(!calendar)throw Error('CALENDAR: Share the selected calendar with the service account.');
+ let acl;try{acl=await call(env,'calendar','calendars/'+encodeURIComponent(target)+'/acl');}catch(e){if(e.googleStatus!==403)throw e;}const own=(acl?.items||[]).some(r=>r.scope?.value===credentials(env).client_email&&r.role==='owner');
+ if(calendar.summary==='BillsBills reminders'&&own)await call(env,'calendar','calendars/'+encodeURIComponent(target),'PATCH',{summary:'BillBills reminders'});
+ if((snapshot.tables.Operations||[]).some(o=>!['DONE','CANCELLED'].includes(o.state)))throw Error('RECOVERY: Resolve pending operations first.');
+ const changes=[],now=new Date().toISOString();for(const [key,value]of Object.entries({SyncEnabled:'true',IncludeHistorical:'true'})){const found=snapshot.tables.Settings.find(r=>r.key===key);if(!found)throw Error('SCHEMA: Calendar setting is missing.');const before={...found};delete before._slot;if(before.value!==value)changes.push({entity:'Settings',before,after:{...before,value,revision:Number(before.revision)+1,updatedAt:now}});}
+ if(changes.length)domain.integrationCommit(changes,crypto.randomUUID(),'ENABLE_CALENDAR_SYNC');domain.property('DATABASE_AUTOMATION','true');return {enabled:true,message:'BillBills Calendar synchronization enabled for statements and loans.'};
 }

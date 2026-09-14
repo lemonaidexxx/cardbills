@@ -11,6 +11,7 @@ const CC_COMMON = ['id', 'revision', 'createdAt', 'updatedAt'];
 
 const CC_SCHEMA = {
 
+  LoanCalendar:'loanId installmentNumber dueDate calendarId eventId syncedAt fingerprint syncError attempts nextRetry',
   Loans:'lender nickname currency firstDueDate dueDay termMonths principalMinor notes status',
   LoanSchedules:'loanId startDate endDate monthlyMinor status',
   LoanPayments:'loanId date amountMinor currency reference notes status',
@@ -115,7 +116,7 @@ const CC_SETTINGS = {
 
 const CC_CURRENCY = {PHP:2,USD:2,EUR:2,GBP:2,CNY:2,HKD:2,SGD:2,AUD:2,CAD:2,JPY:0,KRW:0,TWD:2,THB:2,MYR:2,IDR:2,INR:2,AED:2,SAR:2,CHF:2,NZD:2,BHD:3,KWD:3};
 
-const CC_INTERNAL = ['ImportHistory','AuditHistory','Operations','SheetBaseline','ImportBatches','ImportRows'];
+const CC_INTERNAL = ['LoanCalendar','ImportHistory','AuditHistory','Operations','SheetBaseline','ImportBatches','ImportRows'];
 
 const CC_TECH = ['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','sourceKey','sourceRef'];
 
