@@ -13,7 +13,7 @@ replace("return json({ data: await bridge(env, session, body.action, body.args) 
         return harden(await stub.fetch('https://internal/finance',{method:'POST',body:JSON.stringify({session,action:body.action,args:body.args})}));
       }
       return json({ data: await bridge(env, session, body.action, body.args) });`);
-replace("'/styles.css','/favicon.svg'", "'/styles.css','/browse-cache.js','/favicon.svg'");
+replace("'/styles.css','/favicon.svg'", "'/styles.css','/browse-cache.js','/favicon.svg','/fonts/Poppins-Regular.ttf','/fonts/Poppins-Medium.ttf','/fonts/Poppins-SemiBold.ttf','/fonts/Poppins-Bold.ttf','/fonts/OFL.txt'");
 replace("if (url.pathname === '/health') return json({ status: 'running' });","if (url.pathname === '/health') return json({ status: 'running', release: FINANCIAL_REVISION, financialBackend: env.DATA_BACKEND === 'supabase' ? 'supabase' : 'sheets' });");
 replace("export default {\n  async fetch",`export default {
   async scheduled(event,env,ctx) {
