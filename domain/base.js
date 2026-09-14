@@ -947,7 +947,7 @@ function review_(db) {
 
       if(e==='Transactions'){
 
-        if(['PURCHASE','FEE','INTEREST','CASH_ADVANCE','INSTALLMENT','FINANCED_PRINCIPAL'].includes(r.type)&&Number(r.amountMinor)<0)add(e,r,'Charge type requires a nonnegative amount');
+        if(['PURCHASE','FEE','INTEREST','CASH_ADVANCE','INSTALLMENT'].includes(r.type)&&Number(r.amountMinor)<0)add(e,r,'Charge type requires a nonnegative amount');
 
         if(['BANK_PAYMENT','REFUND','REBATE'].includes(r.type)&&Number(r.amountMinor)>0)add(e,r,'Credit type requires a nonpositive amount');
 

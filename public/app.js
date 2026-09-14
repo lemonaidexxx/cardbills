@@ -121,7 +121,7 @@ function statementDueLabel(dueDate,today){const days=Math.round((Date.parse(dueD
     TRANSFER:['Transfer','Movement between accounts or balances.','Signed activity; kept separate from classified spending.'],
     ADJUSTMENT:['Adjustment','A bank correction requiring its own classification.','Signed correction; kept separate from classified spending.'],
     INSTALLMENT:['Installment charge','One monthly installment actually posted on the statement.','Positive amount; included once in classified spending.'],
-    FINANCED_PRINCIPAL:['Financed principal','Original purchase converted into an installment plan.','Tracked separately; monthly installment charges represent spending.'],
+    FINANCED_PRINCIPAL:['Financed principal','Full purchase converted into an installment plan; RCBC may show this as a negative entry.','Keep the original sign. Excluded from spending; separate positive monthly installment charges represent billed spending.'],
     UNKNOWN:['Needs classification','Use while the purpose of an entry is still uncertain.','Included in the review count until a type is selected.']
   };
   const iconPaths={filter:'M3 4h18l-7 8v7l-4 2v-9z',
