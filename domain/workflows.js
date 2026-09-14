@@ -54,6 +54,7 @@ function billsResult_(db,entity,id,replayed) {
 }
 
 function billsSave(entity,input,expectedToken,requestId) {
+  if(entity==='InstallmentLinks')return billsSaveInstallmentLinks_(input,requestId);
   if(entity==='TransactionReviewBatch')return billsSaveReviewBatch_(input,requestId);
   if(!['TransactionReview','StatementPayment','TagOption'].includes(entity))return apiSave(entity,input,expectedToken,requestId);
   return guard_(()=>{
@@ -126,6 +127,30 @@ function billsSave(entity,input,expectedToken,requestId) {
     billsChanged_(db,changes,opId,'STATEMENT_PAYMENT');
     return billsResult_(load_(),'Statements',after.id,false);
   },true);
+}
+
+function billsSaveInstallmentLinks_(input,requestId){
+ return guard_(()=>{
+  if(!input||typeof input.planId!=='string'||!Array.isArray(input.items)||!input.items.length||input.items.length>10)fail_('VALIDATION: Select a plan and up to 10 charges per batch.');
+  const db=load_(),opId=validRequest_(requestId),items=input.items,seen=new Set(),numbers=new Set();
+  for(const item of items){if(!item||typeof item.id!=='string'||seen.has(item.id)||!/^[a-f0-9]{64}$/i.test(item.token||'')||!Number.isInteger(item.number)||item.number<1||numbers.has(item.number))fail_('VALIDATION: Select distinct charges and installment numbers.');seen.add(item.id);numbers.add(item.number);}
+  const prior=db.Operations.find(o=>o.id===opId);
+  if(prior){const changes=JSON.parse(prior.payload);if(prior.kind!=='INSTALLMENT_LINKS'||changes.length!==items.length||items.some(i=>!changes.some(c=>c.after.id===i.id&&token_(c.before)===i.token&&c.after.installmentPlanId===input.planId&&c.after.installmentNumber===i.number)))fail_('CONFLICT: Retry the original installment selections.');if(prior.state!=='DONE')fail_('RECOVERY: Resume the pending operation.');return billsReviewBatchResult_(db,items,true,true);}
+  ensureRecovered_(db);
+  const plan=db.InstallmentPlans.find(p=>p.id===input.planId&&p.status!=='ARCHIVED');if(!plan)fail_('VALIDATION: Choose an existing active or completed installment plan.');
+  const changes=items.map(item=>{
+   const before=db.Transactions.find(t=>t.id===item.id);
+   if(!before||token_(before)!==item.token)fail_('CONFLICT: A selected charge changed. Refresh and review it before linking.');
+   if(before.status!=='ACTIVE'||Number(before.amountMinor)<=0||!['UNKNOWN','PURCHASE','INSTALLMENT'].includes(before.type))fail_('VALIDATION: Select active purchase or installment charges, not payments or financed principal.');
+   if(before.accountId!==plan.accountId||before.currency!==plan.currency||plan.cardId&&before.cardId!==plan.cardId)fail_('VALIDATION: Charges must match the plan account, currency and card.');
+   if(before.installmentPlanId&&before.installmentPlanId!==plan.id)fail_('CONFLICT: A charge already belongs to another plan.');
+   if(item.number>Number(plan.count))fail_('VALIDATION: Installment number exceeds the plan length.');
+   if(db.Transactions.some(t=>!seen.has(t.id)&&t.status==='ACTIVE'&&t.type==='INSTALLMENT'&&t.installmentPlanId===plan.id&&Number(t.installmentNumber)===item.number))fail_('CONFLICT: That installment number already has a linked charge.');
+   return {entity:'Transactions',before,after:prepare_('Transactions',{installmentPlanId:plan.id,installmentNumber:item.number,type:'INSTALLMENT'},before)};
+  });
+  if(JSON.stringify(changes).length>44000)fail_('LIMIT: Link fewer charges in this batch.');
+  billsChanged_(db,changes,opId,'INSTALLMENT_LINKS');return billsReviewBatchResult_(load_(),items,true,false);
+ },true);
 }
 
 function billsCalendarMarker_(s) {

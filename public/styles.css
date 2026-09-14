@@ -26,3 +26,5 @@
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 
 .nav-footer{display:block}.activity button:hover{background:#e8edf5}.overview-intro{margin:8px 0 28px}.overview-intro h2{font-size:clamp(28px,3vw,40px);line-height:1.15;letter-spacing:-1px;margin-bottom:12px}.overview-intro p{font-size:15px}.overview-intro button{margin-top:4px}
+
+.installment-charge{display:grid;grid-template-columns:minmax(0,1fr) 130px;gap:16px;padding:16px 0;border-bottom:1px solid #d2d2d7}.installment-choice{display:flex;align-items:center;gap:12px;overflow-wrap:anywhere}.installment-choice input[type=checkbox]{width:20px;height:20px;min-height:20px;flex:none}.installment-actions{position:sticky;bottom:0;background:#fff;padding-top:12px}@media(max-width:600px){.installment-charge{grid-template-columns:1fr;gap:8px}.installment-charge>label:last-child{max-width:160px}}

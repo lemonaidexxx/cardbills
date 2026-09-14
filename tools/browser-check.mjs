@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 const require=createRequire(path.resolve(process.argv[2]||'node_modules/playwright/package.json'));
 const {chromium}=require('playwright');
 const fixture=JSON.parse(execFileSync(process.execPath,['tests/browser-fixture.mjs'],{encoding:'utf8'}));
+fixture.boot.schema.Transactions+=' dueDate';
+fixture.boot.lookups.Statements.forEach(s=>s.statementDate='2026-09-09');
+fixture.boot.lookups.InstallmentPlans=[{id:'test-plan',label:'Example installment plan',accountId:fixture.boot.lookups.Accounts[0].id,currency:'PHP',status:'ACTIVE',count:12}];
 fixture.boot.storage='supabase';fixture.boot.databaseVersion=42;
 fixture.boot.diagnostics.lastBackupVersion='41';fixture.boot.diagnostics.googleConfigured=true;
 const output=fs.mkdtempSync(path.join(os.tmpdir(),'cardbills-browser-'));
@@ -18,7 +21,7 @@ try{for(const [mode,width,height]of [['desktop',1440,1000],['tablet',820,1180],[
  async function load(file,script){
   const html=fs.readFileSync('public/'+file,'utf8').replace(/<link\b[^>]*>/g,'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'');
   await page.setContent(html);await page.addStyleTag({content:fs.readFileSync('public/styles.css','utf8')});
-  await page.evaluate(data=>{window.fetch=async(url,options={})=>{let result={signedIn:false};if(url==='/api/rpc'){const req=JSON.parse(options.body);result={data:req.action==='apiBootstrap'?data.boot:req.action==='apiList'?data.lists[req.args[0]]:[]};}return new Response(JSON.stringify(result),{headers:{'Content-Type':'application/json'}});};},fixture);
+  await page.evaluate(data=>{crypto.randomUUID=()=> '11111111-1111-4111-8111-'+String(Math.floor(Math.random()*1e12)).padStart(12,'0');window.fetch=async(url,options={})=>{let result={signedIn:false};if(url==='/api/rpc'){const req=JSON.parse(options.body);result={data:req.action==='apiBootstrap'?data.boot:req.action==='apiList'?data.lists[req.args[0]]:[]};}return new Response(JSON.stringify(result),{headers:{'Content-Type':'application/json'}});};},fixture);
   await page.addScriptTag({content:fs.readFileSync('public/'+script,'utf8')});
  }
  const noOverflow=async()=>assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),mode+' overflow');
@@ -26,6 +29,9 @@ try{for(const [mode,width,height]of [['desktop',1440,1000],['tablet',820,1180],[
  await load('login.html','login.js');await page.locator('#username:focus').waitFor();await page.locator('#password').fill('synthetic-password');await page.locator('#show-password').click();assert.equal(await page.locator('#password').getAttribute('type'),'text');await noOverflow();await page.screenshot({path:path.join(output,'login-'+mode+'.png'),fullPage:true});
  await load('app.html','app.js');await page.getByRole('heading',{name:'Recent transactions',exact:true}).waitFor();await noOverflow();await page.screenshot({path:path.join(output,'overview-'+mode+'.png'),fullPage:true});
  await nav('Activity');await page.getByRole('button',{name:'Import reviewed package',exact:true}).click();assert.ok(await page.locator('#dialog').evaluate(e=>e.open));await page.keyboard.press('Escape');assert.ok(!await page.locator('#dialog').evaluate(e=>e.open));
+ await page.getByLabel('Account',{exact:true}).selectOption(fixture.boot.lookups.Accounts[0].id);await page.getByLabel('Statement date',{exact:true}).selectOption('2026-09-09');
+ await page.getByRole('button',{name:'Groceries',exact:true}).click();await page.getByRole('button',{name:'Link installment charges',exact:true}).click();assert.deepEqual(errors,[]);await page.getByLabel('Installment plan ID',{exact:true}).selectOption('test-plan');await page.getByRole('checkbox').first().check();await page.getByRole('spinbutton').first().fill('1');await noOverflow();await page.screenshot({path:path.join(output,'installments-'+mode+'.png'),fullPage:true});await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'Edit record',exact:true}).click();await page.locator('#edit-dueDate').fill('2026-10-05');assert.equal(await page.locator('#edit-dueDate').getAttribute('type'),'date');await page.keyboard.press('Escape');await page.keyboard.press('Escape');
  await nav('Accounts');const account=page.getByRole('button',{name:'Everyday account',exact:true});await account.click();assert.ok(await page.locator('#context-drawer').evaluate(e=>e.open));await page.screenshot({path:path.join(output,'drawer-'+mode+'.png'),fullPage:true});await page.keyboard.press('Escape');assert.ok(!await page.locator('#context-drawer').evaluate(e=>e.open));assert.ok(await account.evaluate(e=>e===document.activeElement));
  for(const [group,subsections]of Object.entries({Activity:['Review','Saved Views'],Accounts:['Statements','Bank Payments','Installments'],Collections:['Money Owed','People','Repayments'],Settings:['Workspace and Backups','Configuration']})){
   await nav(group);for(const name of subsections){await page.locator('#subnav').getByRole('button',{name,exact:true}).click();await page.locator('#title').filter({hasText:name}).waitFor();await noOverflow();}

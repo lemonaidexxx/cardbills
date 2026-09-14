@@ -105,8 +105,8 @@ function createTransactionDrafts() {
   const label=k=>configured('field.'+k,labels[k]||k.replace(/([A-Z])/g,' $1').trim().replace(/^./,s=>s.toUpperCase()));
   const refs={accountId:'Accounts',cardId:'Cards',statementId:'Statements',paymentId:'BankPayments',transactionId:'Transactions',personId:'People',shareId:'Shares',installmentPlanId:'InstallmentPlans',replacesCardId:'Cards',originTransactionId:'Transactions',matchedTransactionId:'Transactions'};
   const technical=new Set(['calendarId','eventId','syncedAt','fingerprint','syncError','attempts','nextRetry','sourceKey','sourceRef']);
-  const displays={Labels:['key','value'],ReportConfig:['key','value'],Accounts:['nickname','bank','currency','status'],Cards:['nickname','accountId','lastFour','relationship','status'],Transactions:['description','transactionDate','amountMinor','currency','type','reviewStatus','reviewAction'],Statements:['accountId','statementDate','dueDate','balanceMinor','paidMinor','remainingMinor','settlement','calendarMode'],BankPayments:['accountId','date','amountMinor','currency','status'],PaymentAllocations:['paymentId','statementId','amountMinor','status'],People:['name','contact','status'],Shares:['personId','transactionId','amountMinor','remainingMinor','requestStatus','settlement'],Repayments:['shareId','date','amountMinor','currency','type','status'],InstallmentPlans:['reference','accountId','count','postedCount','status'],SavedViews:['name','scope','status']};
-  const dateBases={Transactions:['transactionDate','postingDate'],Statements:['statementDate','dueDate'],Shares:['transactionDate','expectedDate','requestDate'],BankPayments:['date'],Repayments:['date']};
+  const displays={Labels:['key','value'],ReportConfig:['key','value'],Accounts:['nickname','bank','currency','status'],Cards:['nickname','accountId','lastFour','relationship','status'],Transactions:['description','transactionDate','dueDate','amountMinor','currency','type','reviewStatus','reviewAction'],Statements:['accountId','statementDate','dueDate','balanceMinor','paidMinor','remainingMinor','settlement','calendarMode'],BankPayments:['accountId','date','amountMinor','currency','status'],PaymentAllocations:['paymentId','statementId','amountMinor','status'],People:['name','contact','status'],Shares:['personId','transactionId','amountMinor','remainingMinor','requestStatus','settlement'],Repayments:['shareId','date','amountMinor','currency','type','status'],InstallmentPlans:['reference','accountId','count','postedCount','status'],SavedViews:['name','scope','status']};
+  const dateBases={Transactions:['transactionDate','postingDate','dueDate'],Statements:['statementDate','dueDate'],Shares:['transactionDate','expectedDate','requestDate'],BankPayments:['date'],Repayments:['date']};
   const navigationDescriptions={Overview:'Activity, statements and personal collections, each with its own ledger.',Transactions:'Review activity, add tags and assign purchases to people.',Statements:'Official balances, billing dates and confirmed allocations.','Money Owed':'Track requests, partial repayments and agreed credits independently.','Settings and Integration':'Manage configuration, Calendar reminders and recovery.'};
   const typeGuide={
     PURCHASE:['Purchase','Goods or services charged to the card.','Positive amount; included in classified spending.'],
@@ -368,6 +368,15 @@ function createTransactionDrafts() {
     if(state.entity==='Transactions'){bar.append(button('Import CSV',showImport));bar.append(button('Import reviewed package',showPackageImport));bar.append(button('Type guide',showTypeGuide));}
     if(state.entity==='Shares')bar.append(button('Preview report',showReport));
     if(state.entity==='Statements'&&state.boot.storage!=='supabase')bar.append(button('Synchronize statement events',synchronizeStatements));
+    if(['Transactions','Statements','BankPayments','InstallmentPlans','Cards'].includes(state.entity)){
+      const account=select([{id:'',label:'All accounts'},...(state.boot.lookups.Accounts||[])],state.filters.accountId||'',false);
+      account.setAttribute('aria-label','Account');account.addEventListener('change',()=>{state.filters.accountId=account.value;delete state.filters.statementDate;delete state.filters.statementId;delete state.filters.cardId;state.page=0;render();});bar.append(field('Account',account));
+      if(['Transactions','Statements'].includes(state.entity)){
+        const dates=[...new Set((state.boot.lookups.Statements||[]).filter(s=>!state.filters.accountId||s.accountId===state.filters.accountId).map(s=>s.statementDate).filter(Boolean))].sort().reverse();
+        const date=select([{id:'',label:'All statement dates'},...dates.map(d=>({id:d,label:d}))],state.filters.statementDate||'',false);
+        date.setAttribute('aria-label','Statement date');date.addEventListener('change',()=>{state.filters.statementDate=date.value;state.page=0;render();});bar.append(field('Statement date',date));
+      }
+    }
     c.append(bar);
     const more=el('details');more.open=Object.keys(state.filters).some(k=>k!=='q'&&state.filters[k]);more.append(el('summary','','Filters and sorting'));
     const f=el('div','filters');
@@ -383,6 +392,7 @@ function createTransactionDrafts() {
     if(result.summary){Object.entries(result.summary).forEach(([cur,t])=>{const panel=el('section','card');panel.append(el('h2','','Collections · '+cur));const metrics=el('div','metrics');[['Assigned',t.assigned],['Cash received',t.cash],['Credits / waivers',t.credits],['Remaining owed',t.remaining]].forEach(([name,n])=>{const d=el('div','metric');append(d,el('span','',name),el('strong','',money(n,cur)));metrics.append(d);});panel.append(metrics);const counts=el('div','toolbar');[['Not requested',t.notRequested,{requestStatus:'NOT_REQUESTED'}],['Partially settled',t.partial,{settlement:'PARTIAL'}],['Settled',t.settled,{settlement:'SETTLED'}],['Disputed',t.disputed,{requestStatus:'DISPUTED'}],['Past expected date',t.pastExpected,{expectedState:'PAST_EXPECTED_DATE'}]].forEach(([name,n,f])=>counts.append(button(name+' ('+n+')',()=>{state.filters=Object.assign({},state.filters,f,{currency:cur});state.page=0;render();})));append(panel,el('p','subtle','Active shares within the current filters. Request status and settlement are independent.'),counts);container.append(panel);});}
     simpleTable(container,state.entity,result.rows);const pager=el('div','pager');pager.append(el('span','',result.total+' records · page '+(result.page+1)+' of '+Math.max(1,Math.ceil(result.total/40))));const controls=el('div');const prev=button('Previous',()=>{state.page--;render();}),next=button('Next',()=>{state.page++;render();});prev.disabled=result.page===0;next.disabled=(result.page+1)*40>=result.total;append(controls,prev,next);pager.append(controls);container.append(pager);}
   function showDetails(entity,r){state.selected=r;const c=$('context');c.replaceChildren();append(c,el('p','eyebrow','RECORD DETAILS'),el('h2','',label(entity)));const details=el('div');Object.keys(r).filter(k=>!k.startsWith('_')&&!['fingerprint','revision','sourceKey'].includes(k)).forEach(k=>{const d=el('div','detail-row');append(d,el('span','',label(k)),el('strong','',k==='totals'?Object.entries(r.totals).map(([cur,n])=>money(n,cur)).join(', '):display(r,k)));details.append(d);});c.append(details);c.append(button('Edit record',()=>editRecord(entity,r)));
+    if(entity==='Transactions')c.append(button('Link installment charges',()=>linkInstallments(r)));
     if(entity==='Transactions')c.append(button('Assign a share',()=>editRecord('Shares',{transactionId:r.id,currency:r.currency,status:'ACTIVE',requestStatus:'NOT_REQUESTED'})));
     if(entity==='Transactions'){const panel=el('section','card');append(panel,el('h3','','Classify and review'),transactionControls(r));c.append(panel);}
     if(entity==='Statements')c.append(statementPaymentPicker(r));
@@ -395,6 +405,33 @@ function createTransactionDrafts() {
     if(entity==='People')c.append(button('Collection history',()=>navigate('Money Owed',undefined,{personId:r.id})));
     if(entity==='SavedViews')c.append(button('Open saved view',()=>{try{navigate(Object.keys(areas).find(a=>areas[a].includes(r.scope)),r.scope,JSON.parse(r.filters));state.sort=r.sort;render();}catch(_){notice('Invalid saved view. Edit its filters.','error');}}));
     if(!$('context-drawer').open)$('context-drawer').showModal();c.scrollTo({top:0,behavior:'instant'});
+  }
+  function linkInstallments(record){
+    const box=el('div'),plans=(state.boot.lookups.InstallmentPlans||[]).filter(p=>p.status!=='ARCHIVED'&&p.accountId===record.accountId&&p.currency===record.currency&&(!p.cardId||p.cardId===record.cardId));
+    const plan=select(plans,record.installmentPlanId||''),search=input('','search'),list=el('div'),selected=new Map();let page=0,sequence=0,requestId=uuid(),retryPayload=null;
+    plan.setAttribute('aria-label','Installment plan ID');search.placeholder='Search existing charges';
+    append(box,el('p','subtle','Choose an installment plan, then select existing charges and their installment numbers. Amounts and dates stay unchanged. Link up to 10 charges at a time.'),field('Installment plan ID',plan),button('Create installment plan',()=>editRecord('InstallmentPlans',{accountId:record.accountId,cardId:record.cardId,currency:record.currency,startDate:record.transactionDate,monthlyMinor:record.amountMinor,reference:record.description})),field('Search charges',search),list);
+    const save=button('Link selected charges',async()=>{try{
+      if(!plan.value||!selected.size)throw Error('Choose a plan and select charges first.');
+      if([...selected.keys()].some(id=>transactionDrafts.has(id)))throw Error('Save or discard pending transaction selections before linking these charges.');
+      retryPayload=retryPayload||{planId:plan.value,items:[...selected.values()]};save.disabled=true;
+      try{const result=await rpc('apiSave','InstallmentLinks',retryPayload,'',requestId);applyReviewRows(result.rows||[]);applyWorkflowResult(result);$('dialog').close();$('context-drawer').close();await render();notice('Installment charges linked.');}
+      finally{save.disabled=false;}
+    }catch(error){$('dialog-error').textContent=error.message;}});box.append(append(el('div','form-actions installment-actions'),save));
+    function changed(){retryPayload=null;requestId=uuid();}
+    async function load(){const current=++sequence;const result=await rpc('apiList','Transactions',{accountId:record.accountId,currency:record.currency,status:'ACTIVE',q:search.value},page,'transactionDate:asc');if(current!==sequence)return;list.replaceChildren();
+      const chosen=plans.find(p=>p.id===plan.value);if(chosen)list.append(el('p','subtle','Plan ID: '+chosen.id));
+      result.rows.forEach(r=>{const line=el('div','installment-charge'),check=input('','checkbox'),number=input(selected.get(r.id)?.number||r.installmentNumber||'','number');number.min='1';number.max=String(chosen?.count||600);number.step='1';
+        const eligible=chosen&&Number(r.amountMinor)>0&&['UNKNOWN','PURCHASE','INSTALLMENT'].includes(r.type)&&(!chosen.cardId||r.cardId===chosen.cardId)&&(!r.installmentPlanId||r.installmentPlanId===chosen.id);
+        check.checked=selected.has(r.id);check.disabled=!eligible;number.disabled=!check.checked;
+        const caption=r.transactionDate+' · '+r.description+' · '+money(r.amountMinor,r.currency);
+        check.addEventListener('change',()=>{if(check.checked&&selected.size>=10){check.checked=false;notice('Select up to 10 charges per batch.','error');return;}changed();number.disabled=!check.checked;if(check.checked)selected.set(r.id,{id:r.id,token:r._token,number:Number(number.value)});else selected.delete(r.id);});
+        number.addEventListener('input',()=>{changed();if(selected.has(r.id))selected.get(r.id).number=Number(number.value);});
+        const choice=el('label','installment-choice');append(choice,check,el('span','',caption));append(line,choice,field('Installment number',number));list.append(line);
+      });
+      const previous=button('Previous',()=>{page--;action(load);}),next=button('Next',()=>{page++;action(load);});previous.disabled=page===0;next.disabled=(page+1)*40>=result.total;append(list,append(el('div','pager'),previous,el('span','',selected.size+' selected'),next));
+    }
+    plan.addEventListener('change',()=>{selected.clear();changed();page=0;action(load);});search.addEventListener('change',()=>{page=0;action(load);});openDialog('Link installment charges',box);action(load);
   }
   function editRecord(entity,record={}){
     const form=el('form'),grid=el('div','form-grid'),controls={};const isEdit=!!record.id;
@@ -412,7 +449,7 @@ function createTransactionDrafts() {
       else if(/Date$|^date$|^periodStart$|^periodEnd$/.test(k))n=input(value,'date');
       else n=input(value);
       n.id='edit-'+k;n.required=(state.boot.required[entity]||'').split(' ').includes(k);controls[k]=n;
-      const hints={tags:'Comma-separated labels. Tags do not create obligations.',lastFour:'Exactly four digits. Never enter full card numbers.',balanceMinor:'Official bank statement balance. Leave blank if unknown.',minimumMinor:'Official minimum due. Leave blank if unknown.',reconciliation:'VERIFIED means you have checked bank-payment information.',notes:'Private; excluded from shareable reports.',amountMinor:'Decimal currency amount. No thousands separators.',status:['BankPayments','Repayments'].includes(entity)?'Confirm only after verifying receipt. Reverse corrections; keep history.':'',filters:'JSON object using the supported Saved View filters.'};
+      const hints={dueDate:entity==='Transactions'?'Optional due date for this transaction. This does not change the statement due date.':'',tags:'Comma-separated labels. Tags do not create obligations.',lastFour:'Exactly four digits. Never enter full card numbers.',balanceMinor:'Official bank statement balance. Leave blank if unknown.',minimumMinor:'Official minimum due. Leave blank if unknown.',reconciliation:'VERIFIED means you have checked bank-payment information.',notes:'Private; excluded from shareable reports.',amountMinor:'Decimal currency amount. No thousands separators.',status:['BankPayments','Repayments'].includes(entity)?'Confirm only after verifying receipt. Reverse corrections; keep history.':'',filters:'JSON object using the supported Saved View filters.'};
       const l=field(k,n,hints[k]);if(['notes','originalDescription','description','filters','tags'].includes(k))l.classList.add('wide');grid.append(l);
     });
     const relation=controls.accountId||controls.shareId||controls.transactionId;if(relation&&controls.currency)relation.addEventListener('change',()=>{const type=refs[relation.name];const item=(state.boot.lookups[type]||[]).find(x=>x.id===relation.value);if(item?.currency)controls.currency.value=item.currency;});

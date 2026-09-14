@@ -15,7 +15,7 @@ const CC_SCHEMA = {
 
   Cards: 'accountId product nickname lastFour cardholder relationship replacesCardId status',
 
-  Transactions: 'accountId cardId statementId transactionDate postingDate originalDescription description amountMinor currency type category tags notes sourceKey sourceRef reviewStatus installmentPlanId installmentNumber status',
+  Transactions: 'accountId cardId statementId transactionDate postingDate dueDate originalDescription description amountMinor currency type category tags notes sourceKey sourceRef reviewStatus installmentPlanId installmentNumber status',
 
   Statements: 'accountId statementDate periodStart periodEnd dueDate balanceMinor minimumMinor currency status reconciliation calendarMode calendarId eventId syncedAt fingerprint syncError attempts nextRetry',
 
@@ -1090,11 +1090,12 @@ function validateFilters_(f) {
 
   if(!f||Array.isArray(f)||typeof f!=='object')fail_('VALIDATION: Invalid filters.');
 
-  const allowed=['q','personId','tag','status','requestStatus','settlement','expectedState','from','to','currency','dateBasis','accountId','cardId','statementId','transactionId','shareId','type','spending','undated','installmentPlanId'];
+  const allowed=['q','personId','tag','status','requestStatus','settlement','expectedState','from','to','currency','dateBasis','accountId','cardId','statementId','statementDate','transactionId','shareId','type','spending','undated','installmentPlanId'];
 
   Object.keys(f).forEach(k=>{if(!allowed.includes(k)||typeof f[k]!=='string'||f[k].length>300)fail_('VALIDATION: Invalid filter.');});
 
   if(f.from&&!dateValid_(f.from)||f.to&&!dateValid_(f.to)||f.from&&f.to&&f.from>f.to)fail_('VALIDATION: Invalid filter dates.');
+  if(f.statementDate&&!dateValid_(f.statementDate))fail_('VALIDATION: Choose a valid statement date.');
 
 }
 
@@ -1102,13 +1103,14 @@ function filtered_(e,db,f,sort) {
 
   validateFilters_(f);const parts=sort.split(':');if(parts.length!==2||!['asc','desc'].includes(parts[1]))fail_('VALIDATION: Invalid sort.');
 
-  const dates={Transactions:['transactionDate','postingDate'],Statements:['statementDate','dueDate'],Shares:['transactionDate','expectedDate','requestDate'],BankPayments:['date'],Repayments:['date']};
+  const dates={Transactions:['transactionDate','postingDate','dueDate'],Statements:['statementDate','dueDate'],Shares:['transactionDate','expectedDate','requestDate'],BankPayments:['date'],Repayments:['date']};
 
   const basis=f.dateBasis||(dates[e]||['updatedAt'])[0];if(!(dates[e]||['updatedAt']).includes(basis))fail_('VALIDATION: Unsupported date basis.');
 
   return db[e].map(r=>decorate_(e,r,db)).filter(r=>{
 
     const t=e==='Shares'?db.Transactions.find(x=>x.id===r.transactionId)||{}:r;
+    if(f.statementDate){const statement=e==='Statements'?r:db.Statements.find(s=>s.id===(r.statementId||t.statementId));if(!statement||statement.statementDate!==f.statementDate)return false;}
 
     if(f.spending==='true'&&(t.status!=='ACTIVE'||!['PURCHASE','FEE','INTEREST','CASH_ADVANCE','INSTALLMENT'].includes(t.type)))return false;
 
@@ -1146,7 +1148,7 @@ function lookups_(db) {const out={};['Accounts','Cards','People','Transactions',
 
   const account=db.Accounts.find(a=>a.id===r.accountId);const base=r.nickname||r.name||r.description||r.statementDate||r.date||r.reference||r.id;
 
-  return {id:r.id,label:base+(e==='Cards'&&r.lastFour?' · •••• '+r.lastFour:'')+(['Statements','BankPayments'].includes(e)&&account?' · '+account.nickname:'')+' · '+r.id.slice(-6),currency:r.currency||(account&&account.currency)||'',accountId:r.accountId||'',status:r.status};
+  return {id:r.id,label:base+(e==='Cards'&&r.lastFour?' · •••• '+r.lastFour:'')+(['Statements','BankPayments'].includes(e)&&account?' · '+account.nickname:'')+' · '+r.id.slice(-6),currency:r.currency||(account&&account.currency)||'',accountId:r.accountId||'',status:r.status,...(e==='Statements'?{statementDate:r.statementDate}:{}),...(e==='InstallmentPlans'?{cardId:r.cardId,count:Number(r.count)}:{})};
 
 }));return out;}
 
@@ -1732,4 +1734,3 @@ function importChanges_(results,db){
   return {changes,imported};
 
 }
-

@@ -67,3 +67,32 @@ test('failed manual backup commits only error metadata and normal reads remain d
  assert.equal((await invoke('apiBackup')).status,502);assert.equal((await invoke('apiBootstrap')).status,200);assert.ok(calls.every(url=>url.startsWith('https://project.supabase.co/')));
  }finally{globalThis.fetch=old;}
 });
+
+
+test('transaction due dates persist independently and filter by due date and statement date',()=>{
+ const {snapshot,statement}=sample();let d=createDomain(snapshot,owner),r=row(d,'Transactions');
+ d.call('apiSave',['Transactions',{id:r.id,dueDate:'2026-10-05',statementId:statement},r._token,randomUUID()]);
+ d=createDomain(apply(snapshot,d),owner);const updated=row(d,'Transactions');assert.equal(updated.dueDate,'2026-10-05');assert.equal(updated.amountMinor,r.amountMinor);assert.equal(row(d,'Statements').dueDate,'2026-09-30');
+ assert.equal(d.call('apiList',['Transactions',{dateBasis:'dueDate',from:'2026-10-01'},0,'dueDate:asc']).total,1);
+ assert.equal(d.call('apiList',['Transactions',{statementDate:'2026-09-03'},0,'dueDate:asc']).total,1);
+ assert.equal(d.call('apiList',['Transactions',{statementDate:'2026-09-04'},0,'dueDate:asc']).total,0);
+ assert.throws(()=>d.call('apiSave',['Transactions',{id:updated.id,dueDate:'2026-02-30'},updated._token,randomUUID()]),/VALIDATION/);
+});
+test('installment linking preserves charge values and safely replays',()=>{
+ let {snapshot,account,card}=sample(),d=createDomain(snapshot,owner);
+ d.call('apiSave',['InstallmentPlans',{accountId:account,cardId:card,reference:'Example plan',startDate:'2026-09-01',monthlyMinor:10000,currency:'PHP',count:12,status:'ACTIVE'},'',randomUUID()]);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);const r=row(d,'Transactions'),plan=row(d,'InstallmentPlans'),id=randomUUID(),payload={planId:plan.id,items:[{id:r.id,token:r._token,number:1}]};
+ const result=d.call('apiSave',['InstallmentLinks',payload,'',id]);assert.equal(result.rows[0].installmentPlanId,plan.id);assert.equal(result.rows[0].type,'INSTALLMENT');assert.equal(result.rows[0].amountMinor,r.amountMinor);assert.equal(result.rows[0].transactionDate,r.transactionDate);
+ const after=apply(snapshot,d);d=createDomain(after,owner);assert.equal(d.call('apiSave',['InstallmentLinks',payload,'',id]).replayed,true);
+ d=createDomain(snapshot,owner);assert.throws(()=>d.call('apiSave',['InstallmentLinks',{...payload,items:[{...payload.items[0],number:13}]},'',randomUUID()]),/length/);assert.equal(d.changes().length,0);
+ assert.throws(()=>d.call('apiSave',['InstallmentLinks',{...payload,items:[{...payload.items[0],token:'f'.repeat(64)}]},'',randomUUID()]),/CONFLICT/);assert.equal(d.changes().length,0);
+});
+
+test('installment batch rejects duplicate numbers atomically',()=>{
+ let {snapshot,account,card}=sample(),d=createDomain(snapshot,owner);
+ d.call('apiSave',['InstallmentPlans',{accountId:account,cardId:card,reference:'Plan',startDate:'2026-09-01',monthlyMinor:10000,currency:'PHP',count:12,status:'ACTIVE'},'',randomUUID()]);snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);
+ d.call('apiSave',['Transactions',{accountId:account,cardId:card,transactionDate:'2026-10-01',description:'Next charge',amountMinor:10000,currency:'PHP',type:'PURCHASE',reviewStatus:'VERIFIED',status:'ACTIVE'},'',randomUUID()]);snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);
+ const plan=row(d,'InstallmentPlans'),rows=d.call('apiList',['Transactions',{},0,'transactionDate:asc']).rows;
+ const payload={planId:plan.id,items:rows.map(r=>({id:r.id,token:r._token,number:1}))};assert.throws(()=>d.call('apiSave',['InstallmentLinks',payload,'',randomUUID()]),/distinct/);assert.equal(d.changes().length,0);
+ payload.items[1].number=2;const result=d.call('apiSave',['InstallmentLinks',payload,'',randomUUID()]);assert.equal(result.rows.length,2);assert.equal(result.rows.reduce((sum,r)=>sum+r.amountMinor,0),20000);
+});
