@@ -234,6 +234,13 @@ function apiSave(entity, record, expectedToken, requestId) { return guard_(() =>
 
   const after=prepare_(entity,record,before);
 
+  if(entity==='Transactions'&&(after.installmentPlanId!==before?.installmentPlanId||after.installmentNumber!==before?.installmentNumber||after.accountId!==before?.accountId||after.cardId!==before?.cardId||after.currency!==before?.currency||after.type!==before?.type||after.status!==before?.status)){
+    if(after.installmentPlanId){const p=db.InstallmentPlans.find(p=>p.id===after.installmentPlanId);if(!p||p.accountId!==after.accountId||p.currency!==after.currency||(p.cardId&&p.cardId!==after.cardId))fail_('VALIDATION: Choose a compatible installment plan.');
+      if(after.type!=='INSTALLMENT')fail_('VALIDATION: Payment sequence applies to monthly installment charges. Link financed principal through the plan.');
+      if(!Number.isInteger(Number(after.installmentNumber))||Number(after.installmentNumber)<1||Number(after.installmentNumber)>Number(p.count))fail_('VALIDATION: Payment sequence must be within the plan total.');
+      if(db.Transactions.some(t=>t.id!==after.id&&t.status==='ACTIVE'&&t.type==='INSTALLMENT'&&t.installmentPlanId===p.id&&Number(t.installmentNumber)===Number(after.installmentNumber)))fail_('CONFLICT: That payment sequence already has an active charge.');
+    }else if(after.installmentNumber)fail_('VALIDATION: Select an installment plan for this sequence.');
+  }
   const next=domainClone_(db); next[entity]=next[entity].filter(x=>x.id!==after.id).concat(after);
 
   const oldIssues=review_(db), newIssues=review_(next);

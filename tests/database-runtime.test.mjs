@@ -163,3 +163,13 @@ test('current-month card chart is independent of the selected trend year',()=>{c
 
 test('explicit loan overpayment allocation can cover two installments and rejects stale loan revisions',()=>{const {d,id}=loanSample(),loan=d.call('apiList',['LoanDashboard',{loanId:id},0,'']).loans[0],payload={loanId:id,date:'2024-02-01',amountMinor:15000,allocations:[{number:1,amountMinor:10000},{number:2,amountMinor:5000}]};assert.throws(()=>d.call('apiSave',['LoanPayment',payload,'f'.repeat(64),randomUUID()]),/CONFLICT/);d.call('apiSave',['LoanPayment',payload,loan._token,randomUUID()]);assert.equal(d.changes().filter(c=>c.entity==='LoanAllocations').length,2);});
 test('share batch cannot reduce a share below an existing repayment',()=>{const {snapshot}=sample();snapshot.tables.Transactions[0].type='PURCHASE';snapshot.tables.People=[{id:'person',name:'Person',status:'ACTIVE',revision:1,_slot:2}];snapshot.tables.Shares=[{id:'share',personId:'person',transactionId:snapshot.tables.Transactions[0].id,amountMinor:10000,currency:'PHP',status:'ACTIVE',requestStatus:'NOT_REQUESTED',revision:1,_slot:2}];snapshot.tables.Repayments=[{id:'repayment',shareId:'share',date:'2026-09-01',amountMinor:6000,currency:'PHP',type:'CASH',status:'CONFIRMED',revision:1,_slot:2}];const d=createDomain(snapshot,owner),tx=row(d,'Transactions'),share=row(d,'Shares');assert.throws(()=>d.call('apiSave',['ShareBatch',{transactionId:tx.id,items:[{id:share.id,token:share._token,personId:'person',amountMinor:5000}]},tx._token,randomUUID()]),/VALIDATION/);assert.equal(d.changes().length,0);});
+
+test('transaction editor links a bounded installment sequence and preserves amounts',()=>{
+ let {snapshot,account,card}=sample(),d=createDomain(snapshot,owner);
+ d.call('apiSave',['InstallmentPlans',{accountId:account,cardId:card,reference:'Plan',startDate:'2026-09-01',currency:'PHP',count:12,status:'ACTIVE'},'',randomUUID()]);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);const r=row(d,'Transactions'),p=row(d,'InstallmentPlans'),id=randomUUID();
+ assert.throws(()=>d.call('apiSave',['Transactions',{id:r.id,type:'INSTALLMENT',installmentPlanId:p.id,installmentNumber:13},r._token,randomUUID()]),/sequence/);
+ d.call('apiSave',['Transactions',{id:r.id,type:'INSTALLMENT',installmentPlanId:p.id,installmentNumber:3},r._token,id]);
+ d=createDomain(apply(snapshot,d),owner);assert.equal(row(d,'Transactions').installmentNumber,3);assert.equal(row(d,'Transactions').amountMinor,r.amountMinor);
+ assert.equal(d.call('apiSave',['Transactions',{id:r.id,type:'INSTALLMENT',installmentPlanId:p.id,installmentNumber:3},r._token,id]).replayed,true);
+});
