@@ -123,7 +123,7 @@ begin
    insert into public.bb_records(owner_id,entity,id,slot,data) values(p_owner,ent,a->>'id',pos,a);
   end if;
  end loop;
- if p_mode='automation' and (p_properties-array['LAST_SYNC','LAST_BACKUP','AUTOMATION_ERROR']) is distinct from (w.properties-array['LAST_SYNC','LAST_BACKUP','AUTOMATION_ERROR']) then raise exception 'ACCESS_DENIED: Invalid automation settings.' using errcode='42501';end if;
+ if p_mode='automation' and (p_properties-array['LAST_SYNC','LAST_BACKUP','LAST_BACKUP_VERSION','BACKUP_ERROR','AUTOMATION_ERROR']) is distinct from (w.properties-array['LAST_SYNC','LAST_BACKUP','LAST_BACKUP_VERSION','BACKUP_ERROR','AUTOMATION_ERROR']) then raise exception 'ACCESS_DENIED: Invalid automation settings.' using errcode='42501';end if;
  update public.bb_workspaces set version=version+1,properties=p_properties,updated_at=now() where owner_id=p_owner returning version into p_version;
  result:=p_result||jsonb_build_object('databaseVersion',p_version);
  insert into public.bb_mutations(owner_id,id,request_hash,result,version) values(p_owner,p_id,p_hash,result,p_version);

@@ -2,27 +2,28 @@ import {createHash} from 'node:crypto';
 import {Buffer} from 'node:buffer';
 import {formatLocal} from './platform.mjs';
 const encoder=new TextEncoder();
-let cachedToken=null;
+const cachedTokens=new Map();
 const hash=x=>createHash('sha256').update(x).digest('hex');
 const base64url=b=>Buffer.from(b).toString('base64url');
 function credentials(env){let value;try{value=JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON||'');}catch{throw Error('SETUP: Add the Google service account secret for Calendar and Sheet backups.');}if(value.type!=='service_account'||!value.client_email?.endsWith('.iam.gserviceaccount.com')||!value.private_key?.includes('BEGIN PRIVATE KEY'))throw Error('SETUP: Check the Google service account secret.');return value;}
-async function googleToken(env){
- const c=credentials(env),keyId=hash(c.client_email+c.private_key_id);
- if(cachedToken?.keyId===keyId&&cachedToken.until>Date.now()+60000)return cachedToken.token;
- const now=Math.floor(Date.now()/1000),head=base64url(JSON.stringify({alg:'RS256',typ:'JWT'})),payload=base64url(JSON.stringify({iss:c.client_email,scope:'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600}));
+async function googleToken(env,service){
+ const c=credentials(env),keyId=hash(c.client_email+c.private_key_id+service),cachedToken=cachedTokens.get(keyId);
+ if(cachedToken&&cachedToken.until>Date.now()+60000)return cachedToken.token;
+ const scope=service==='sheets'?'https://www.googleapis.com/auth/spreadsheets':'https://www.googleapis.com/auth/calendar';
+ const now=Math.floor(Date.now()/1000),head=base64url(JSON.stringify({alg:'RS256',typ:'JWT'})),payload=base64url(JSON.stringify({iss:c.client_email,scope,aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600}));
  const key=await crypto.subtle.importKey('pkcs8',Buffer.from(c.private_key.replace(/-----[^-]+-----/g,'').replace(/\s/g,''),'base64'),{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['sign']);
  const content=head+'.'+payload,signature=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',key,encoder.encode(content));
  const response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:content+'.'+base64url(signature)}),signal:AbortSignal.timeout(20000)});
  const body=await response.json();if(!response.ok||!body.access_token)throw Error('SETUP: Google authorization failed. Check the service account and enabled APIs.');
- cachedToken={keyId,token:body.access_token,until:Date.now()+Number(body.expires_in||3600)*1000};return cachedToken.token;
+ cachedTokens.set(keyId,{token:body.access_token,until:Date.now()+Number(body.expires_in||3600)*1000});return body.access_token;
 }
 async function call(env,service,path,method='GET',body){
  const bases={calendar:'https://www.googleapis.com/calendar/v3/',sheets:'https://sheets.googleapis.com/v4/'};
  if(!bases[service]||path.includes('://'))throw Error('VALIDATION: Invalid Google operation.');
- let response;try{response=await fetch(bases[service]+path,{method,headers:{Authorization:'Bearer '+await googleToken(env),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(20000)});}catch(e){if(/^(SETUP|VALIDATION):/.test(e.message))throw e;throw Error('CALENDAR: Google response was interrupted. Retry synchronization to check its result.');}
+ let response;try{response=await fetch(bases[service]+path,{method,headers:{Authorization:'Bearer '+await googleToken(env,service),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(20000)});}catch(e){if(/^(SETUP|VALIDATION):/.test(e.message))throw e;throw Error((service==='sheets'?'BACKUP':'CALENDAR')+': Google response was interrupted. Retry to check its result.');}
  if(response.status===404&&method==='GET')return null;
  const data=await response.json().catch(()=>({}));
- if(!response.ok){const error=Error('CALENDAR: Google rejected the request. Check sharing permissions and API configuration.');error.googleStatus=response.status;throw error;}
+ if(!response.ok){const error=Error((service==='sheets'?'BACKUP':'CALENDAR')+': Google rejected the request. Check sharing permissions and API configuration.');error.googleStatus=response.status;throw error;}
  return data;
 }
 const eventPath=(cal,id)=>'calendars/'+encodeURIComponent(cal)+'/events/'+encodeURIComponent(id);
@@ -61,7 +62,7 @@ export async function backupSheet(env,domain,snapshot){
   requests.push({updateCells:{range:{sheetId:properties.sheetId,startRowIndex:0,endRowIndex:Math.max(last,properties.gridProperties.rowCount),startColumnIndex:0,endColumnIndex:headers.length},rows:cells,fields:'userEnteredValue'}});
  }
  await call(env,'sheets','spreadsheets/'+encodeURIComponent(id)+':batchUpdate','POST',{requests});
- domain.property('LAST_BACKUP',new Date().toISOString());return {id,message:'Google Sheet backup updated.',databaseVersion:snapshot.version};
+ domain.property('LAST_BACKUP',new Date().toISOString());domain.property('LAST_BACKUP_VERSION',String(snapshot.version));domain.property('BACKUP_ERROR','');return {id,message:'Daily backup completed.',databaseVersion:snapshot.version};
 }
 export async function googleAction(env,domain,snapshot,action,args){
  if(action==='apiSyncPreview'){const {plans}=domain.calendarPlans();return plans.map(({statement:s,plan:p})=>({id:s.id,dueDate:s.dueDate,action:p.skip?'SKIP':p.disabled?'HISTORY / SILENT':s.eventId?'UPDATE':'CREATE / LINK'}));}
@@ -69,6 +70,7 @@ export async function googleAction(env,domain,snapshot,action,args){
  if(action==='apiSync')return syncCalendar(env,domain,snapshot);
  const settings=domain.inspect().settings;
  if(action==='apiActivateIntegrations')return activateIntegrations(env,domain,snapshot);
+ if(action==='apiEnableSheetBackups')return activateSheetBackups(env,domain,snapshot);
  if(action==='apiCalendarTest'){const c=await call(env,'calendar','calendars/'+encodeURIComponent(settings.CalendarId));if(!c)throw Error('CALENDAR: Share the selected calendar with the Google service account.');return {connected:true,timeZone:c.timeZone};}
  if(action==='apiCalendars'){const c=await call(env,'calendar','calendars/'+encodeURIComponent(settings.CalendarId||env.OWNER_EMAIL));return c?[{id:c.id,label:c.summary||c.id}]:[];}
  if(action==='apiCreateCalendar'){const c=await call(env,'calendar','calendars','POST',{summary:'BillsBills reminders',timeZone:settings.Timezone});await call(env,'calendar','calendars/'+encodeURIComponent(c.id)+'/acl?sendNotifications=false','POST',{role:'owner',scope:{type:'user',value:env.OWNER_EMAIL}});return {id:c.id,label:c.summary};}
@@ -83,8 +85,28 @@ export async function googleAction(env,domain,snapshot,action,args){
 export async function runGoogleAutomation(env,domain,snapshot){
  let sync={processed:0,failed:0,remaining:0};const settings=domain.inspect().settings;
  if(settings.SyncEnabled==='true')sync=await syncCalendar(env,domain,snapshot,false);
- if(settings.BackupEnabled==='true'&&Date.now()-Date.parse(snapshot.properties.LAST_BACKUP||'1970-01-01')>=Number(settings.BackupDays||1)*86400000)await backupSheet(env,domain,snapshot);
+ if(backupDue(settings,snapshot.properties))try{await backupSheet(env,domain,snapshot);}catch(error){domain.property('BACKUP_ERROR',String(error.message));sync.backupFailed=true;}
  return sync;
+}
+
+export function backupDue(settings,properties,now=Date.now()){
+ const last=Date.parse(properties.LAST_BACKUP||''),days=Number(settings.BackupDays||1);
+ return settings.BackupEnabled==='true'&&(!Number.isFinite(last)||now-last>=Math.max(1,Number.isFinite(days)?days:1)*86400000);
+}
+
+export async function activateSheetBackups(env,domain,snapshot){
+ const sheet=await call(env,'sheets','spreadsheets/'+encodeURIComponent(snapshot.sourceSheetId)+'?fields=spreadsheetId');
+ if(!sheet)throw Error('SETUP: Share the backup Sheet with the Google service account as an editor.');
+ if((snapshot.tables.Operations||[]).some(o=>!['DONE','CANCELLED'].includes(o.state)))throw Error('RECOVERY: Resolve pending operations first.');
+ const changes=[],now=new Date().toISOString();
+ for(const [key,value]of Object.entries({BackupEnabled:'true',BackupDays:'1',SyncEnabled:'false'})){
+  const found=(snapshot.tables.Settings||[]).find(r=>r.key===key);if(!found)throw Error('SCHEMA: Required backup setting is missing.');
+  const before={...found};delete before._slot;
+  if(before.value!==value)changes.push({entity:'Settings',before,after:{...before,value,revision:Number(before.revision)+1,updatedAt:now}});
+ }
+ if(changes.length)domain.integrationCommit(changes,crypto.randomUUID(),'ENABLE_SHEETS_BACKUPS');
+ domain.property('DATABASE_AUTOMATION','true');
+ return {enabled:true,backupSheet:snapshot.sourceSheetId,message:'Daily Sheets backups enabled. Calendar synchronization is disabled.'};
 }
 
 async function beginCalendarMigration(env,domain,snapshot,args){

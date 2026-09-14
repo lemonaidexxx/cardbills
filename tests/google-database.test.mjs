@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync} from 'node:crypto';
-import {backupSheet,syncCalendar,googleAction} from '../worker/google.mjs';
+import {backupSheet,syncCalendar,googleAction,backupDue,runGoogleAutomation} from '../worker/google.mjs';
 const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048});
 const env={OWNER_EMAIL:'owner@example.test',GOOGLE_SERVICE_ACCOUNT_JSON:JSON.stringify({type:'service_account',client_email:'tests@example.iam.gserviceaccount.com',private_key_id:'synthetic-only',private_key:privateKey.export({type:'pkcs8',format:'pem'})})};
 async function mock(run,handler){const old=globalThis.fetch;globalThis.fetch=async(url,options)=>url==='https://oauth2.googleapis.com/token'?Response.json({access_token:'synthetic-token',expires_in:3600}):handler(url,options);try{return await run();}finally{globalThis.fetch=old;}}
@@ -10,3 +10,20 @@ test('failed Sheet writes never mark the backup successful',async()=>{let backed
 test('Calendar adoption matches exact marker and retains original event ID',async()=>{const writes=[],calls=[],s={id:'statement',dueDate:'2026-09-30',eventId:'',revision:1},body={start:{dateTime:'2026-09-30T09:00:00+08:00'},reminders:{useDefault:false,overrides:[]}},domain={calendarPlans:()=>({settings:{SyncEnabled:'true',Timezone:'Asia/Manila'},plans:[{statement:s,plan:{cal:env.OWNER_EMAIL,id:'deterministic',body,fingerprint:'x'},marker:'BillsBills link: exact'}]}),calendarOwned:()=>false,writeCalendar:(b,a)=>writes.push(a),property:()=>{}};await mock(()=>syncCalendar(env,domain,{}),(url,options)=>{calls.push({url,options});if(options.method==='GET')return Response.json({items:[{id:'preserved-event',description:'<p>BillsBills link: exact</p>',start:{dateTime:'2026-09-30T09:00:00+08:00'},visibility:'private',attendees:[]}]});return Response.json({id:'preserved-event'});});assert.equal(writes[0].eventId,'preserved-event');assert.equal(calls.filter(c=>c.options.method==='POST').length,0);});
 test('Calendar duplicate markers are flagged without modifying events',async()=>{let changed;const domain={calendarPlans:()=>({settings:{SyncEnabled:'true',Timezone:'Asia/Manila'},plans:[{statement:{id:'s',dueDate:'2026-09-30',revision:1},plan:{cal:env.OWNER_EMAIL,id:'new',body:{},fingerprint:'x'},marker:'BillsBills link: exact'}]}),calendarOwned:()=>false,writeCalendar:(_,a)=>changed=a,property:()=>{}};const result=await mock(()=>syncCalendar(env,domain,{}),(url,options)=>{assert.equal(options.method,'GET');return Response.json({items:[{description:'BillsBills link: exact'},{description:'BillsBills link: exact'}]});});assert.equal(result.failed,1);assert.equal(changed.eventId,undefined);});
 test('missing Google authorization leaves integrations unchanged',async()=>{await assert.rejects(()=>googleAction({}, {inspect:()=>({settings:{CalendarId:'owner@example.test'}})}, {},'apiCalendarTest',[]),/SETUP/);});
+
+test('backup-only activation changes only backup settings and disables sync without Calendar access',async()=>{
+ const tables={Settings:Object.entries({BackupEnabled:'false',BackupDays:'7',SyncEnabled:'true'}).map(([key,value],i)=>({id:String(i),key,value,revision:1,_slot:i+2})),Statements:[{id:'unchanged',calendarMode:'ON'}],Operations:[]};
+ let changes,property;const domain={inspect:()=>({settings:{}}),integrationCommit:c=>{changes=c;},property:(k,v)=>{property=[k,v];}};
+ await mock(()=>googleAction(env,domain,{sourceSheetId:'synthetic-spreadsheet-000000',tables},'apiEnableSheetBackups',[]),(url,options)=>{assert.ok(url.startsWith('https://sheets.googleapis.com/'));assert.equal(options.method,'GET');return Response.json({spreadsheetId:'synthetic'});});
+ assert.deepEqual(Object.fromEntries(changes.map(c=>[c.after.key,c.after.value])),{BackupEnabled:'true',BackupDays:'1',SyncEnabled:'false'});assert.ok(changes.every(c=>c.entity==='Settings'));assert.deepEqual(property,['DATABASE_AUTOMATION','true']);assert.equal(tables.Statements[0].calendarMode,'ON');
+});
+test('daily backups are due only after 24 hours and disabled backups never run',()=>{
+ const now=Date.parse('2026-09-14T10:00:00Z'),settings={BackupEnabled:'true',BackupDays:'1'};
+ assert.equal(backupDue(settings,{LAST_BACKUP:'2026-09-13T10:00:01Z'},now),false);assert.equal(backupDue(settings,{LAST_BACKUP:'2026-09-13T10:00:00Z'},now),true);assert.equal(backupDue({...settings,BackupEnabled:'false'},{},now),false);assert.equal(backupDue(settings,{LAST_BACKUP:'invalid'},now),true);
+});
+test('scheduled backup failure records an actionable error without changing success metadata or invoking Calendar',async()=>{
+ const properties={LAST_BACKUP:'2020-01-01T00:00:00Z',LAST_BACKUP_VERSION:'9'};
+ const domain={inspect:()=>({settings:{SyncEnabled:'false',BackupEnabled:'true',BackupDays:'1'}}),property:(k,v)=>{properties[k]=v;}};
+ const result=await mock(()=>runGoogleAutomation(env,domain,{sourceSheetId:'synthetic-spreadsheet-000000',properties}),(url)=>{assert.ok(url.startsWith('https://sheets.googleapis.com/'));return Response.json({}, {status:403});});
+ assert.equal(result.backupFailed,true);assert.equal(properties.LAST_BACKUP,'2020-01-01T00:00:00Z');assert.equal(properties.LAST_BACKUP_VERSION,'9');assert.match(properties.BACKUP_ERROR,/sharing permissions/);
+});

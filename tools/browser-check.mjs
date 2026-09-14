@@ -1,0 +1,36 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+import {execFileSync} from 'node:child_process';
+import assert from 'node:assert/strict';
+const require=createRequire(path.resolve(process.argv[2]||'node_modules/playwright/package.json'));
+const {chromium}=require('playwright');
+const fixture=JSON.parse(execFileSync(process.execPath,['tests/browser-fixture.mjs'],{encoding:'utf8'}));
+fixture.boot.storage='supabase';fixture.boot.databaseVersion=42;
+fixture.boot.diagnostics.lastBackupVersion='41';fixture.boot.diagnostics.googleConfigured=true;
+const output=fs.mkdtempSync(path.join(os.tmpdir(),'cardbills-browser-'));
+const browser=await chromium.launch({executablePath:process.env.BROWSER_EXECUTABLE||undefined,headless:true});
+const checks=[];
+try{for(const [mode,width,height]of [['desktop',1440,1000],['tablet',820,1180],['mobile',390,844]]){
+ const page=await browser.newPage({viewport:{width,height}}),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ async function load(file,script){
+  const html=fs.readFileSync('public/'+file,'utf8').replace(/<link\b[^>]*>/g,'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'');
+  await page.setContent(html);await page.addStyleTag({content:fs.readFileSync('public/styles.css','utf8')});
+  await page.evaluate(data=>{window.fetch=async(url,options={})=>{let result={signedIn:false};if(url==='/api/rpc'){const req=JSON.parse(options.body);result={data:req.action==='apiBootstrap'?data.boot:req.action==='apiList'?data.lists[req.args[0]]:[]};}return new Response(JSON.stringify(result),{headers:{'Content-Type':'application/json'}});};},fixture);
+  await page.addScriptTag({content:fs.readFileSync('public/'+script,'utf8')});
+ }
+ const noOverflow=async()=>assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),mode+' overflow');
+ const nav=async name=>{if(width<=700)await page.locator('#nav-toggle').click();await page.locator('#nav').getByRole('button',{name,exact:true}).click();};
+ await load('login.html','login.js');await page.locator('#username:focus').waitFor();await page.locator('#password').fill('synthetic-password');await page.locator('#show-password').click();assert.equal(await page.locator('#password').getAttribute('type'),'text');await noOverflow();await page.screenshot({path:path.join(output,'login-'+mode+'.png'),fullPage:true});
+ await load('app.html','app.js');await page.getByRole('heading',{name:'Recent transactions',exact:true}).waitFor();await noOverflow();await page.screenshot({path:path.join(output,'overview-'+mode+'.png'),fullPage:true});
+ await nav('Activity');await page.getByRole('button',{name:'Import reviewed package',exact:true}).click();assert.ok(await page.locator('#dialog').evaluate(e=>e.open));await page.keyboard.press('Escape');assert.ok(!await page.locator('#dialog').evaluate(e=>e.open));
+ await nav('Accounts');const account=page.getByRole('button',{name:'Everyday account',exact:true});await account.click();assert.ok(await page.locator('#context-drawer').evaluate(e=>e.open));await page.screenshot({path:path.join(output,'drawer-'+mode+'.png'),fullPage:true});await page.keyboard.press('Escape');assert.ok(!await page.locator('#context-drawer').evaluate(e=>e.open));assert.ok(await account.evaluate(e=>e===document.activeElement));
+ for(const [group,subsections]of Object.entries({Activity:['Review','Saved Views'],Accounts:['Statements','Bank Payments','Installments'],Collections:['Money Owed','People','Repayments'],Settings:['Workspace and Backups','Configuration']})){
+  await nav(group);for(const name of subsections){await page.locator('#subnav').getByRole('button',{name,exact:true}).click();await page.locator('#title').filter({hasText:name}).waitFor();await noOverflow();}
+ }
+ await nav('Settings');await page.getByRole('button',{name:'Enable Sheets backups',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Synchronize all statements',exact:true}).count(),0);await page.screenshot({path:path.join(output,'settings-'+mode+'.png'),fullPage:true});
+ assert.deepEqual(errors,[]);checks.push(mode+' auth, navigation, drawers, focus return, import dialog and all section layouts');await page.close();
+}}finally{await browser.close();}
+console.log(JSON.stringify({checks,output,data:'Synthetic records only'},null,2));

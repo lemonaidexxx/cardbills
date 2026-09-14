@@ -1,11 +1,11 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {createDomain} from './domain.generated.mjs';
 import {databaseRpc,DatabaseError} from './database.mjs';
-import {googleAction,runGoogleAutomation} from './google.mjs';
+import {googleAction,runGoogleAutomation,backupSheet,backupDue} from './google.mjs';
 
-export const FINANCIAL_REVISION='supabase-20260913-1';
+export const FINANCIAL_REVISION='cardbills-20260914-1';
 const readActions=new Set(['apiIdentity','apiBootstrap','apiList','apiImportLookups','apiPackageReceipt','apiInstallmentSchedule','apiReport','apiImportPreview','apiImportPage','apiImportStatus','apiSyncPreview','apiCalendars','apiCalendarTest','apiSyncStatus','apiExportDatabase','apiCalendarMigrationPreview']);
-const googleActions=new Set(['apiBackup','apiCalendarTest','apiCalendars','apiCreateCalendar','apiSync','apiSyncPreview','apiCalendarMigrationPreview','apiCalendarMigrate','apiActivateIntegrations']);
+const googleActions=new Set(['apiBackup','apiCalendarTest','apiCalendars','apiCreateCalendar','apiSync','apiSyncPreview','apiCalendarMigrationPreview','apiCalendarMigrate','apiActivateIntegrations','apiEnableSheetBackups']);
 const explicitIds={apiSave:3,apiSettings:2,apiPackageCommit:1,apiResolveMissing:3,apiImportCommit:4,apiCalendarMigrate:2};
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const reply=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
@@ -18,16 +18,17 @@ export class BillsBillsEngine {
       const data=await request.json();
       if(data.kind==='automation'){
         if(this.env.DATA_BACKEND!=='supabase')return reply({skipped:true});
-        return await this.serial(()=>this.automate());
+        return await this.automate();
       }
       const {session,action,args}=data;
       if(!session?.complete||session.user?.id!==this.env.OWNER_USER_ID||!/^[a-f0-9]{64}$/.test(session.id||'')||typeof session.token!=='string')return reply({error:'Complete owner and authenticator verification.'},403);
       if(!Array.isArray(args)||args.length>8||typeof action!=='string')return reply({error:'VALIDATION: Unsupported operation.'},400);
+      if(action==='apiBackup')return await this.backup(session);
       const run=()=>this.operation(session,action,args);
       return readActions.has(action)?await run():await this.serial(run);
     }catch(error){
       const text=String(error.message||'');
-      return reply({error:/^(ACCESS_DENIED|VALIDATION|CONFLICT|SCHEMA|SETUP|REVIEW|IMPORT|RECOVERY|LIMIT|CALENDAR|BUSY):/.test(text)?text:'REVIEW: The operation could not be completed.'},error.status||400);
+      return reply({error:/^(ACCESS_DENIED|VALIDATION|CONFLICT|SCHEMA|SETUP|REVIEW|IMPORT|RECOVERY|LIMIT|CALENDAR|BACKUP|BUSY):/.test(text)?text:'REVIEW: The operation could not be completed.'},error.status||400);
     }
   }
   async serial(run){
@@ -46,8 +47,8 @@ export class BillsBillsEngine {
     if(snapshot.ownerId!==session.user.id)throw Error('ACCESS_DENIED: Workspace owner mismatch.');
     const domain=createDomain(snapshot,{id:session.user.id,email:session.user.email||env.OWNER_EMAIL});
     let result;
-    if(action==='apiExportDatabase')result={format:'billsbills-supabase-backup-v1',sourceSheetId:snapshot.sourceSheetId,version:snapshot.version,properties:snapshot.properties,tables:snapshot.tables,exportedAt:new Date().toISOString()};
-    else if(action==='apiSyncStatus')result={databaseRevision:FINANCIAL_REVISION,version:snapshot.version,googleConfigured:!!env.GOOGLE_SERVICE_ACCOUNT_JSON,lastSync:snapshot.properties.LAST_SYNC||'',lastBackup:snapshot.properties.LAST_BACKUP||''};
+    if(action==='apiExportDatabase')result={format:'billsbills-supabase-backup-v1',ownerEmail:env.OWNER_EMAIL,sourceSheetId:snapshot.sourceSheetId,version:snapshot.version,properties:snapshot.properties,tables:snapshot.tables,exportedAt:new Date().toISOString()};
+    else if(action==='apiSyncStatus')result={databaseRevision:FINANCIAL_REVISION,version:snapshot.version,googleConfigured:!!env.GOOGLE_SERVICE_ACCOUNT_JSON,lastSync:snapshot.properties.LAST_SYNC||'',lastBackup:snapshot.properties.LAST_BACKUP||'',lastBackupVersion:snapshot.properties.LAST_BACKUP_VERSION||'',backupError:snapshot.properties.BACKUP_ERROR||'',backupRunning:!!this.backupJob};
     else if(action==='installTriggers'||action==='stopAutomation')result=domain.automate(action==='installTriggers');
     else if(action==='apiRecover'&&(snapshot.tables.Operations||[]).some(o=>o.id===args[0]&&o.kind==='DATABASE_CALENDAR_MIGRATION'))result=await googleAction(env,domain,snapshot,'apiCalendarRecover',args);
     else if(googleActions.has(action))result=await googleAction(env,domain,snapshot,action,args);
@@ -56,7 +57,10 @@ export class BillsBillsEngine {
       result.storage='supabase';result.databaseRevision=FINANCIAL_REVISION;result.databaseVersion=snapshot.version;
       result.browseSnapshot={loadedAt:Date.now(),tables:domain.browse(),issues:domain.inspect().issues};
       result.diagnostics.googleConfigured=!!env.GOOGLE_SERVICE_ACCOUNT_JSON;
-      result.diagnostics.triggers=snapshot.properties.DATABASE_AUTOMATION==='true'?[{handler:'Cloudflare scheduled synchronization',id:'cloudflare'}]:[];
+      result.diagnostics.lastBackupVersion=snapshot.properties.LAST_BACKUP_VERSION||'';
+      result.diagnostics.backupError=snapshot.properties.BACKUP_ERROR||'';
+      result.diagnostics.backupRunning=!!this.backupJob;
+      result.diagnostics.triggers=snapshot.properties.DATABASE_AUTOMATION==='true'?[{handler:'Cloudflare scheduled backup',id:'cloudflare'}]:[];
     }
     const changes=domain.changes(),properties=domain.properties();
     if(changes.length||mutating&&JSON.stringify(properties)!==JSON.stringify(snapshot.properties)){
@@ -66,7 +70,39 @@ export class BillsBillsEngine {
     }
     return reply({data:result});
   }
+  async backup(session=null){
+    // Authorize each caller even when joining an existing backup.
+    const env=this.env,snapshot=await databaseRpc(env,session?'bb_snapshot':'bb_worker_snapshot',session?{p_full:true}:{p_owner:env.OWNER_USER_ID,p_full:true},session?.token);
+    if(session&&snapshot.ownerId!==session.user.id)throw Error('ACCESS_DENIED: Workspace owner mismatch.');
+    if(!session&&snapshot.properties.DATABASE_AUTOMATION!=='true')return reply({skipped:true});
+    if(this.backupJob)return this.backupJob.then(r=>r.clone());
+    const domain=createDomain(snapshot,{id:env.OWNER_USER_ID,email:env.OWNER_EMAIL});
+    if(!session&&!backupDue(domain.inspect().settings,snapshot.properties))return reply({skipped:true});
+    const job=(async()=>{
+      let result,error;
+      try{result=await backupSheet(env,domain,snapshot);}catch(e){error=e;domain.property('BACKUP_ERROR',/^(SETUP|SCHEMA|BACKUP):/.test(e.message)?e.message:'BACKUP: Backup failed. Check Sheet sharing and retry.');}
+      // Network work happens outside the financial save queue. Merge only backup
+      // metadata into a fresh version, preserving every concurrent record save.
+      await this.serial(async()=>{
+        const current=await databaseRpc(env,session?'bb_snapshot':'bb_worker_snapshot',session?{p_full:false}:{p_owner:env.OWNER_USER_ID,p_full:false},session?.token);
+        const properties={...current.properties},updated=domain.properties();
+        for(const key of error?['BACKUP_ERROR']:['LAST_BACKUP','LAST_BACKUP_VERSION','BACKUP_ERROR'])properties[key]=updated[key];
+        await databaseRpc(env,'bb_commit',{p_owner:env.OWNER_USER_ID,p_session:session?.id||'',p_version:current.version,p_id:randomUUID(),p_hash:sha(JSON.stringify({backup:snapshot.version,properties})),p_changes:[],p_properties:properties,p_result:result||{backupFailed:true},p_mode:session?'user':'automation'});
+      });
+      if(error)return reply({error:domain.properties().BACKUP_ERROR},502);
+      return reply({data:result});
+    })();
+    this.backupJob=job;
+    try{return (await job).clone();}finally{if(this.backupJob===job)this.backupJob=null;}
+  }
   async automate(){
+    const env=this.env;if(!env.GOOGLE_SERVICE_ACCOUNT_JSON)return reply({skipped:true});
+    const snapshot=await databaseRpc(env,'bb_worker_snapshot',{p_owner:env.OWNER_USER_ID,p_full:false});
+    const settings=createDomain(snapshot,{id:env.OWNER_USER_ID,email:env.OWNER_EMAIL}).inspect().settings;
+    if(settings.SyncEnabled!=='true')return this.backup();
+    return this.serial(()=>this.legacyAutomation());
+  }
+  async legacyAutomation(){
     const env=this.env;
     if(!env.GOOGLE_SERVICE_ACCOUNT_JSON)return reply({skipped:true});
     const snapshot=await databaseRpc(env,'bb_worker_snapshot',{p_owner:env.OWNER_USER_ID,p_full:true});

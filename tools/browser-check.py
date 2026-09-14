@@ -8,7 +8,7 @@ output=Path(tempfile.mkdtemp(prefix='cardbills-browser-'))
 checks=[]
 with sync_playwright() as p:
     browser=p.chromium.launch(executable_path=os.environ.get('BROWSER_EXECUTABLE') or shutil.which('chromium') or p.chromium.executable_path,headless=True,args=['--no-sandbox'])
-    for mode,w,h in [('desktop',1440,1000),('mobile',390,844)]:
+    for mode,w,h in [('desktop',1440,1000),('tablet',820,1180),('mobile',390,844)]:
         page=browser.new_page(viewport={'width':w,'height':h},device_scale_factor=1)
         errors=[]
         page.on('pageerror',lambda error:errors.append(str(error)))
@@ -34,17 +34,31 @@ with sync_playwright() as p:
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),mode+' workspace overflow'
         page.screenshot(path=str(output/f'workspace-{mode}.png'),full_page=True)
         checks.append(mode+' workspace overview')
-        page.locator('#nav').get_by_role('button',name='Transactions',exact=True).click()
+        def nav(name):
+            if w<=700: page.locator('#nav-toggle').click()
+            page.locator('#nav').get_by_role('button',name=name,exact=True).click()
+        nav('Activity')
         page.get_by_role('button',name='Import reviewed package',exact=True).wait_for()
         page.get_by_role('button',name='Import reviewed package',exact=True).click()
         assert page.locator('#dialog').evaluate('(el)=>el.open')
         page.get_by_role('button',name='Close dialog',exact=True).click()
         assert not page.locator('#dialog').evaluate('(el)=>el.open')
         checks.append(mode+' transaction navigation and import dialog')
-        page.locator('#nav').get_by_role('button',name='Cards and Accounts',exact=True).click()
+        nav('Accounts')
         page.get_by_role('button',name='Everyday account',exact=True).wait_for()
-        page.locator('#nav').get_by_role('button',name='Money Owed',exact=True).click()
+        page.get_by_role('button',name='Everyday account',exact=True).click()
+        assert page.locator('#context-drawer').evaluate('(el)=>el.open')
+        page.screenshot(path=str(output/f'drawer-{mode}.png'),full_page=True)
+        page.keyboard.press('Escape')
+        assert not page.locator('#context-drawer').evaluate('(el)=>el.open')
+        nav('Collections')
         page.get_by_text('No records to display.',exact=True).wait_for()
+        for group,subsections in [('Activity',['Review','Saved Views']),('Accounts',['Statements','Bank Payments','Installments']),('Collections',['People','Repayments']),('Settings',['Configuration'])]:
+            nav(group)
+            for subsection in subsections:
+                page.locator('#subnav').get_by_role('button',name=subsection,exact=True).click()
+                page.wait_for_timeout(80)
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),mode+' '+subsection+' overflow'
         assert not errors,errors
         checks.append(mode+' accounts and empty collections with zero JavaScript errors')
         page.close()

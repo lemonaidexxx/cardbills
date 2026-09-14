@@ -8,7 +8,7 @@ replace("|| !/^https:\\/\\/script\\.google\\.com\\/macros\\/s\\/[A-Za-z0-9_-]+\\
 replace("|| !/^[a-f0-9]{64}$/i.test(env.BRIDGE_SECRET)", "|| (env.DATA_BACKEND !== 'supabase' && !/^[a-f0-9]{64}$/i.test(env.BRIDGE_SECRET))");
 replace("return json({ data: await bridge(env, session, body.action, body.args) });", `if (env.DATA_BACKEND === 'supabase') {
         if (!env.FINANCE_ENGINE) throw new HttpError(503, 'Complete the database engine deployment.');
-        if (!rpcMethods.has(body.action) && !['apiExportDatabase','apiSyncStatus','apiActivateIntegrations'].includes(body.action)) throw new HttpError(400, 'Choose a supported operation.');
+        if (!rpcMethods.has(body.action) && !['apiExportDatabase','apiSyncStatus','apiActivateIntegrations','apiEnableSheetBackups'].includes(body.action)) throw new HttpError(400, 'Choose a supported operation.');
         const stub=env.FINANCE_ENGINE.get(env.FINANCE_ENGINE.idFromName(env.OWNER_USER_ID));
         return harden(await stub.fetch('https://internal/finance',{method:'POST',body:JSON.stringify({session,action:body.action,args:body.args})}));
       }
