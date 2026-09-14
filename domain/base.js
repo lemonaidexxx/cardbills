@@ -1175,7 +1175,7 @@ function overview_(db,issues) {
 
   return {invalid,totals,months,freshness:txDates.pop()||'',lastImport:db.ImportHistory.map(x=>x.updatedAt).sort().pop()||'',
 
-    recent:filtered_('Transactions',db,{},'transactionDate:desc').slice(0,5),upcoming:filtered_('Statements',db,{status:'OPEN'},'dueDate:asc').filter(s=>s.dueDate&&s.dueDate>=today_(db)&&s.settlement!=='SETTLED').slice(0,6),reviewCount:issues.length};
+    recent:filtered_('Transactions',db,{},'transactionDate:desc').slice(0,5),upcoming:filtered_('Statements',db,{status:'OPEN'},'dueDate:asc').filter(s=>s.dueDate&&s.settlement!=='SETTLED'),reviewCount:issues.length};
 
 }
 
@@ -1463,7 +1463,7 @@ function previewRows_(rows,mappings,db) {
 
       if(r['Last Four']&&!/^\d{4}$/.test(r['Last Four']))throw Error();
 
-      result.transaction={accountId:account.id,cardId:card.id,statementId:'',transactionDate:r['Transaction Date'],postingDate:r['Posting Date'],originalDescription:r.Description,description:r.Description,amountMinor:amount,currency:map.currency,type:'UNKNOWN',category:'',tags:'',notes:'',sourceKey:key,sourceRef:r['Source Reference'],reviewStatus:'REVIEW',installmentPlanId:'',installmentNumber:'',status:'ACTIVE'};
+      result.transaction={accountId:account.id,cardId:card.id,statementId:'',transactionDate:r['Transaction Date'],postingDate:r['Posting Date'],dueDate:r['Payment Due Date']||'',originalDescription:r.Description,description:r.Description,amountMinor:amount,currency:map.currency,type:'UNKNOWN',category:'',tags:'',notes:'',sourceKey:key,sourceRef:r['Source Reference'],reviewStatus:'REVIEW',installmentPlanId:'',installmentNumber:'',status:'ACTIVE'};
 
       if(content.has(contentKey(account.id,r['Transaction Date'],amount,r.Description))||within.has(contentKey(account.id,r['Transaction Date'],amount,r.Description))){result.status='SUSPECT';result.reason='Matching content requires review; may be legitimate';result.transaction.reviewStatus='DUPLICATE_CANDIDATE';}
 

@@ -96,3 +96,15 @@ test('installment batch rejects duplicate numbers atomically',()=>{
  const payload={planId:plan.id,items:rows.map(r=>({id:r.id,token:r._token,number:1}))};assert.throws(()=>d.call('apiSave',['InstallmentLinks',payload,'',randomUUID()]),/distinct/);assert.equal(d.changes().length,0);
  payload.items[1].number=2;const result=d.call('apiSave',['InstallmentLinks',payload,'',randomUUID()]);assert.equal(result.rows.length,2);assert.equal(result.rows.reduce((sum,r)=>sum+r.amountMinor,0),20000);
 });
+
+test('overview includes past-due outstanding statements before future dates',()=>{
+ const {snapshot}=sample();snapshot.tables.Statements[0].dueDate='2020-01-01';const d=createDomain(snapshot,owner),overview=d.call('apiBootstrap',[]).overview;
+ assert.equal(overview.upcoming.length,1);assert.equal(overview.upcoming[0].dueDate,'2020-01-01');assert.equal(overview.upcoming[0].remainingMinor,10000);
+});
+
+test('CSV import retains Payment Due Date on the transaction',()=>{
+ const {snapshot,card}=sample(),d=createDomain(snapshot,owner);
+ const csv=['Source Hash,Source Row,Bank,Card,Last Four,Billing Cycle,Statement Date,Payment Due Date,Transaction Date,Posting Date,Description,Amount,Source Reference',['a'.repeat(64),'1','Example','Card','0123','','','2026-10-10','2026-09-10','2026-09-11','Imported charge','25.00','import-test'].join(',')].join('\n');
+ const mappings={'Example | Card | 0123':{cardId:card,currency:'PHP'}},preview=d.call('apiImportPreview',[csv,mappings]);assert.equal(preview.counts.ACCEPTED,1);
+ d.call('apiImportCommit',[csv,mappings,preview.token,[0],randomUUID()]);const imported=d.changes().find(c=>c.entity==='Transactions').after;assert.equal(imported.dueDate,'2026-10-10');assert.equal(imported.amountMinor,2500);
+});
