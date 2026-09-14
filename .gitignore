@@ -1,0 +1,15 @@
+node_modules/
+.wrangler/
+.env
+.env.*
+.dev.vars
+worker/domain.generated.mjs
+worker/runtime.generated.mjs
+*.xlsx
+*.cardbills.json
+*PRIVATE*
+*private*
+01_Install_And_Import.sql
+current-ledger.json
+BillsBills_Private_Migration*/
+*Private_Migration*.zip

@@ -1,0 +1,43 @@
+{
+  "name": "cardbills",
+  "main": "worker/index.mjs",
+  "compatibility_date": "2026-09-12",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none"
+  },
+  "observability": {
+    "enabled": false
+  },
+  "keep_vars": true,
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "build": {
+    "command": "node tools/build.mjs"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FINANCE_ENGINE",
+        "class_name": "BillsBillsEngine"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "billsbills-finance-v1",
+      "new_sqlite_classes": [
+        "BillsBillsEngine"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  }
+}
