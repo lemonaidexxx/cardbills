@@ -203,3 +203,14 @@ test('principal dropdown assignment is atomic, confirmed and repeat-safe',()=>{
  assert.equal(d.call('apiList',['Transactions',{recordId:charge.id},0,'']).rows[0].amountMinor,10000);
 
 });
+
+test('Review joins all transaction issues before pagination and groups records once',()=>{
+ const {snapshot}=sample();const base=snapshot.tables.Transactions[0];for(let i=0;i<84;i++)snapshot.tables.Transactions.push({...base,id:'review-'+String(i).padStart(3,'0'),description:'Review '+String(i).padStart(3,'0'),_slot:i+3,type:i%2?'UNKNOWN':'INSTALLMENT',amountMinor:i+1});
+ const d=createDomain(snapshot,owner),first=d.call('apiList',['ReviewTransactions',{},0,'amountMinor:asc']),second=d.call('apiList',['ReviewTransactions',{},1,'amountMinor:asc']),last=d.call('apiList',['ReviewTransactions',{},2,'amountMinor:asc']);
+ assert.equal(first.total,85);assert.equal(first.rows.length,40);assert.equal(second.rows.length,40);assert.equal(last.rows.length,5);assert.equal(new Set([...first.rows,...second.rows,...last.rows].map(r=>r.id)).size,85);
+ assert.ok(first.rows.every(r=>r.reviewIssues.length));assert.ok(first.rows.at(-1).amountMinor<=second.rows[0].amountMinor);assert.equal(d.changes().length,0);
+});
+test('resolved transactions leave Review without changing other records',()=>{
+ const {snapshot}=sample();let d=createDomain(snapshot,owner),r=row(d,'Transactions');assert.ok(d.call('apiList',['ReviewTransactions',{},0,'']).rows.some(x=>x.id===r.id));
+ d.call('apiSave',['Transactions',{id:r.id,type:'PURCHASE',reviewStatus:'VERIFIED'},r._token,randomUUID()]);d=createDomain(apply(snapshot,d),owner);assert.ok(!d.call('apiList',['ReviewTransactions',{},0,'']).rows.some(x=>x.id===r.id));
+});

@@ -15,5 +15,6 @@ tables.Transactions.push({...tables.Transactions[0],id:'duplicate-browser-tx',_s
 const owner={id:'11111111-1111-4111-8111-111111111111',email:'owner@example.test'},domain=createDomain({ownerId:owner.id,sourceSheetId:'synthetic-workbook',version:1,properties:{},tables},owner);
 
 const boot=domain.call('apiBootstrap',[]);
-const lists=Object.fromEntries(['LoanDashboard','DuplicateReview','Accounts','Cards','Transactions','Statements','People','Shares','BankPayments','PaymentAllocations','Repayments','InstallmentPlans','SavedViews','Labels','ReportConfig'].map(e=>[e,domain.call('apiList',[e,{},0,'updatedAt:desc'])]));
+const lists=Object.fromEntries(['ReviewTransactions','LoanDashboard','DuplicateReview','Accounts','Cards','Transactions','Statements','People','Shares','BankPayments','PaymentAllocations','Repayments','InstallmentPlans','SavedViews','Labels','ReportConfig'].map(e=>[e,domain.call('apiList',[e,{},0,'updatedAt:desc'])]));
+lists.ReviewTransactions={rows:lists.Transactions.rows.slice(0,2).map((r,i)=>({...r,type:i?'UNKNOWN':'INSTALLMENT',reviewIssues:[{entity:'Transactions',id:r.id,message:i?'Choose an activity type':'Installment needs plan and sequence',severity:'WARNING'}]})),total:2,page:0,issues:[],otherIssues:[]};
 console.log(JSON.stringify({boot,lists}));
