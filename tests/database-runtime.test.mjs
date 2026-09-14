@@ -173,3 +173,33 @@ test('transaction editor links a bounded installment sequence and preserves amou
  d=createDomain(apply(snapshot,d),owner);assert.equal(row(d,'Transactions').installmentNumber,3);assert.equal(row(d,'Transactions').amountMinor,r.amountMinor);
  assert.equal(d.call('apiSave',['Transactions',{id:r.id,type:'INSTALLMENT',installmentPlanId:p.id,installmentNumber:3},r._token,id]).replayed,true);
 });
+
+test('principal dropdown assignment is atomic, confirmed and repeat-safe',()=>{
+ let {snapshot,account,card}=sample(),d=createDomain(snapshot,owner),original=row(d,'Transactions');
+ d.call('apiSave',['Transactions',{id:original.id,type:'FINANCED_PRINCIPAL',amountMinor:-120000},original._token,randomUUID()]);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);
+ d.call('apiSave',['InstallmentPlans',{accountId:account,cardId:card,reference:'Plan',startDate:'2026-09-01',currency:'PHP',count:12,status:'ACTIVE'},'',randomUUID()]);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);const principal=row(d,'Transactions'),plan=row(d,'InstallmentPlans'),id=randomUUID(),input={transaction:{id:principal.id,notes:'Updated with link'},planId:plan.id,planToken:plan._token};
+ assert.throws(()=>d.call('apiSave',['TransactionPrincipal',{...input,planToken:'stale'},principal._token,randomUUID()]),/CONFLICT/);assert.equal(d.changes().length,0);
+ d.call('apiSave',['TransactionPrincipal',input,principal._token,id]);snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);
+ assert.equal(row(d,'Transactions').amountMinor,-120000);assert.equal(row(d,'Transactions').notes,'Updated with link');assert.equal(row(d,'InstallmentPlans').originTransactionId,principal.id);
+ assert.equal(d.call('apiSave',['TransactionPrincipal',input,principal._token,id]).replayed,true);
+ assert.throws(()=>d.call('apiSave',['TransactionPrincipal',{...input,planId:'different'},principal._token,id]),/CONFLICT/);
+ const options=d.call('apiList',['InstallmentOptions',{mode:'principals',accountId:account,cardId:card,currency:'PHP'},0,'']);assert.equal(options.total,1);assert.equal(options.rows[0].amountMinor,-120000);
+ assert.equal(d.call('apiList',['InstallmentOptions',{mode:'principals',accountId:account,cardId:card,currency:'USD'},0,'']).total,0);
+ d.call('apiSave',['Transactions',{accountId:account,cardId:card,transactionDate:'2026-09-01',description:'Second principal',amountMinor:120000,currency:'PHP',type:'FINANCED_PRINCIPAL',reviewStatus:'VERIFIED',status:'ACTIVE'},'',randomUUID()]);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);const second=d.call('apiList',['Transactions',{q:'Second principal'},0,'']).rows[0],updatedPlan=row(d,'InstallmentPlans'),replacement={transaction:{id:second.id},planId:plan.id,planToken:updatedPlan._token};
+ assert.throws(()=>d.call('apiSave',['TransactionPrincipal',replacement,second._token,randomUUID()]),/Confirm replacement/);
+ d.call('apiSave',['TransactionPrincipal',{...replacement,replacePrincipalId:principal.id},second._token,randomUUID()]);assert.equal(d.changes().find(c=>c.entity==='InstallmentPlans').after.originTransactionId,second.id);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);
+ d.call('apiSave',['Transactions',{accountId:account,cardId:card,transactionDate:'2026-09-02',description:'Monthly charge',amountMinor:10000,currency:'PHP',type:'INSTALLMENT',reviewStatus:'VERIFIED',status:'ACTIVE'},'',randomUUID()]);
+ snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);
+ const charge=d.call('apiList',['Transactions',{q:'Monthly charge'},0,'']).rows[0],linked=row(d,'InstallmentPlans'),origin=d.call('apiList',['Transactions',{recordId:second.id},0,'']).rows[0];
+ const link={transaction:{id:charge.id,installmentPlanId:linked.id,installmentNumber:2},planId:linked.id,planToken:linked._token,principalId:origin.id,principalToken:origin._token},linkId=randomUUID();
+ assert.throws(()=>d.call('apiSave',['TransactionInstallment',{...link,principalToken:'stale'},charge._token,randomUUID()]),/CONFLICT/);
+ assert.throws(()=>d.call('apiSave',['TransactionInstallment',{...link,transaction:{...link.transaction,installmentNumber:13}},charge._token,randomUUID()]),/sequence/);
+ d.call('apiSave',['TransactionInstallment',link,charge._token,linkId]);snapshot=apply(snapshot,d);d=createDomain(snapshot,owner);
+ assert.equal(d.call('apiSave',['TransactionInstallment',link,charge._token,linkId]).replayed,true);
+ assert.equal(d.call('apiList',['Transactions',{recordId:charge.id},0,'']).rows[0].amountMinor,10000);
+
+});

@@ -65,3 +65,5 @@ table,.metric strong,.chart-tooltip{font-variant-numeric:tabular-nums lining-num
 .table-actions>.toolbar-edit{margin-left:0;order:initial}
 th{font-weight:600;letter-spacing:.005em}td{line-height:1.55}
 @media(max-width:640px){.toolbar{gap:8px}.toolbar>label:first-child{flex-basis:100%;min-width:0}.toolbar>.table-actions{flex-basis:100%;padding-top:4px}.table-actions{gap:8px}.table-actions>button{min-height:42px}h1{font-size:27px}}
+
+.installment-dropdown{width:min(520px,calc(100vw - 24px));max-height:60vh;overflow:auto}.installment-dropdown [role=listbox]{margin:10px 0}.installment-dropdown [role=option]{display:block;width:100%;text-align:left;white-space:normal;margin:5px 0}.installment-dropdown [role=option]:focus{background:#e8edf5}
