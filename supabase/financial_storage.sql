@@ -10,7 +10,7 @@ create table if not exists public.bb_workspaces (
 );
 create table if not exists public.bb_records (
  owner_id uuid not null references public.bb_workspaces(owner_id),
- entity text not null check(entity in ('LoanCalendar','Loans','LoanSchedules','LoanPayments','LoanAllocations','Accounts','Cards','Transactions','Statements','BankPayments','PaymentAllocations','People','Shares','Repayments','InstallmentPlans','SavedViews','Settings','Labels','ReportConfig','SheetBaseline','ImportBatches','ImportRows','ImportHistory','AuditHistory','Operations')),
+ entity text not null check(entity in ('LoanBalances','LoanCalendar','Loans','LoanSchedules','LoanPayments','LoanAllocations','Accounts','Cards','Transactions','Statements','BankPayments','PaymentAllocations','People','Shares','Repayments','InstallmentPlans','SavedViews','Settings','Labels','ReportConfig','SheetBaseline','ImportBatches','ImportRows','ImportHistory','AuditHistory','Operations')),
  id text not null check(length(id) between 1 and 120),
  slot integer not null check(slot between 2 and 100002),
  data jsonb not null check(jsonb_typeof(data)='object' and data->>'id'=id and octet_length(data::text)<=100000),

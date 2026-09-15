@@ -11,10 +11,11 @@ const CC_COMMON = ['id', 'revision', 'createdAt', 'updatedAt'];
 
 const CC_SCHEMA = {
 
+  LoanBalances:'loanId balanceMinor throughDate reference knownReversals',
   LoanCalendar:'loanId installmentNumber dueDate calendarId eventId syncedAt fingerprint syncError attempts nextRetry',
-  Loans:'lender nickname currency firstDueDate dueDay termMonths principalMinor notes status',
+  Loans:'lender nickname currency firstDueDate dueDay termMonths principalMinor notes status principalHistoryComplete',
   LoanSchedules:'loanId startDate endDate monthlyMinor status',
-  LoanPayments:'loanId date amountMinor currency reference notes status',
+  LoanPayments:'loanId date amountMinor currency reference notes status principalMinor',
   LoanAllocations:'loanId loanPaymentId installmentNumber amountMinor status',
   Accounts: 'bank nickname currency status reviewStatus sharedLimitGroup',
 
