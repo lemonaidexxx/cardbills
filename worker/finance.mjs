@@ -1,9 +1,9 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {createDomain} from './domain.generated.mjs';
 import {databaseRpc,DatabaseError} from './database.mjs';
-import {googleAction,runGoogleAutomation,backupSheet,backupDue} from './google.mjs';
+import {googleAction,runGoogleAutomation,backupSheet,backupDue,automationStatus} from './google.mjs';
 
-export const FINANCIAL_REVISION='billbills-20260916-21';
+export const FINANCIAL_REVISION='billbills-20260917-22';
 const readActions=new Set(['apiIdentity','apiBootstrap','apiList','apiImportLookups','apiPackageReceipt','apiInstallmentSchedule','apiReport','apiImportPreview','apiImportPage','apiImportStatus','apiSyncPreview','apiCalendars','apiCalendarTest','apiSyncStatus','apiExportDatabase','apiCalendarMigrationPreview']);
 const googleActions=new Set(['apiBackup','apiCalendarTest','apiCalendars','apiCreateCalendar','apiSync','apiSyncPreview','apiCalendarMigrationPreview','apiCalendarMigrate','apiActivateIntegrations','apiEnableSheetBackups','apiEnableCalendarSync']);
 const explicitIds={apiSave:3,apiSettings:2,apiPackageCommit:1,apiResolveMissing:3,apiImportCommit:4,apiCalendarMigrate:2};
@@ -65,13 +65,14 @@ export class BillsBillsEngine {
     const domain=createDomain(snapshot,{id:session.user.id,email:session.user.email||env.OWNER_EMAIL});
     let result;
     if(action==='apiExportDatabase')result={format:'billsbills-supabase-backup-v1',ownerEmail:env.OWNER_EMAIL,sourceSheetId:snapshot.sourceSheetId,version:snapshot.version,properties:snapshot.properties,tables:snapshot.tables,exportedAt:new Date().toISOString()};
-    else if(action==='apiSyncStatus')result={databaseRevision:FINANCIAL_REVISION,version:snapshot.version,googleConfigured:!!env.GOOGLE_SERVICE_ACCOUNT_JSON,lastSync:snapshot.properties.LAST_SYNC||'',lastBackup:snapshot.properties.LAST_BACKUP||'',lastBackupVersion:snapshot.properties.LAST_BACKUP_VERSION||'',backupError:snapshot.properties.BACKUP_ERROR||'',backupRunning:!!this.backupJob,calendarEntities:['Statements','LoanCalendar'].map(entity=>({entity,linked:(snapshot.tables[entity]||[]).filter(r=>r.eventId).length,failed:(snapshot.tables[entity]||[]).filter(r=>r.syncError).length}))};
+    else if(action==='apiSyncStatus')result={automation:automationStatus(domain.inspect().settings,snapshot.properties),databaseRevision:FINANCIAL_REVISION,version:snapshot.version,googleConfigured:!!env.GOOGLE_SERVICE_ACCOUNT_JSON,lastSync:snapshot.properties.LAST_SYNC||'',lastBackup:snapshot.properties.LAST_BACKUP||'',lastBackupVersion:snapshot.properties.LAST_BACKUP_VERSION||'',backupError:snapshot.properties.BACKUP_ERROR||'',backupRunning:!!this.backupJob,calendarEntities:['Statements','LoanCalendar'].map(entity=>({entity,linked:(snapshot.tables[entity]||[]).filter(r=>r.eventId).length,failed:(snapshot.tables[entity]||[]).filter(r=>r.syncError).length}))};
     else if(action==='installTriggers'||action==='stopAutomation')result=domain.automate(action==='installTriggers');
     else if(action==='apiRecover'&&(snapshot.tables.Operations||[]).some(o=>o.id===args[0]&&o.kind==='DATABASE_CALENDAR_MIGRATION'))result=await googleAction(env,domain,snapshot,'apiCalendarRecover',args);
     else if(googleActions.has(action))result=await googleAction(env,domain,snapshot,action,args);
     else result=domain.call(action,args);
     if(action==='apiBootstrap'){
       result.storage='supabase';result.databaseRevision=FINANCIAL_REVISION;result.databaseVersion=snapshot.version;
+      result.diagnostics.automation=automationStatus(domain.inspect().settings,snapshot.properties);
       result.diagnostics.googleConfigured=!!env.GOOGLE_SERVICE_ACCOUNT_JSON;
       result.diagnostics.lastBackupVersion=snapshot.properties.LAST_BACKUP_VERSION||'';
       result.diagnostics.backupError=snapshot.properties.BACKUP_ERROR||'';
@@ -118,7 +119,7 @@ export class BillsBillsEngine {
     const snapshot=await databaseRpc(env,'bb_worker_snapshot',{p_owner:env.OWNER_USER_ID,p_full:false});
     const settings=createDomain(snapshot,{id:env.OWNER_USER_ID,email:env.OWNER_EMAIL}).inspect().settings;
     if(settings.SyncEnabled!=='true')return this.backup();
-    return this.serial(()=>this.legacyAutomation());
+    let calendar;try{calendar=await this.serial(()=>this.legacyAutomation());}catch{calendar=reply({error:'CALENDAR: Scheduled synchronization failed.'},502);}const backup=await this.backup();return reply({calendar:await calendar.json(),backup:await backup.json()});
   }
   async legacyAutomation(){
     const env=this.env;
@@ -126,7 +127,7 @@ export class BillsBillsEngine {
     const snapshot=await databaseRpc(env,'bb_worker_snapshot',{p_owner:env.OWNER_USER_ID,p_full:true});
     if(snapshot.properties.DATABASE_AUTOMATION!=='true')return reply({skipped:true});
     const domain=createDomain(snapshot,{id:env.OWNER_USER_ID,email:env.OWNER_EMAIL});
-    const result=await runGoogleAutomation(env,domain,snapshot);
+    const result=await runGoogleAutomation(env,domain,snapshot,{includeBackup:false});
     if(domain.changes().length||JSON.stringify(domain.properties())!==JSON.stringify(snapshot.properties))await databaseRpc(env,'bb_commit',{p_owner:env.OWNER_USER_ID,p_session:'',p_version:snapshot.version,p_id:randomUUID(),p_hash:sha(JSON.stringify({version:snapshot.version,kind:'automation',result})),p_changes:domain.changes(),p_properties:domain.properties(),p_result:result,p_mode:'automation'});
     return reply({data:result});
   }

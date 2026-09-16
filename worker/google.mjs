@@ -23,8 +23,25 @@ async function call(env,service,path,method='GET',body){
  let response;try{response=await fetch(bases[service]+path,{method,headers:{Authorization:'Bearer '+await googleToken(env,service),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(20000)});}catch(e){if(/^(SETUP|VALIDATION):/.test(e.message))throw e;throw Error((service==='sheets'?'BACKUP':'CALENDAR')+': Google response was interrupted. Retry to check its result.');}
  if(response.status===404&&method==='GET')return null;
  const data=await response.json().catch(()=>({}));
- if(!response.ok){const error=Error((service==='sheets'?'BACKUP':'CALENDAR')+': Google rejected the request. Check sharing permissions and API configuration.');error.googleStatus=response.status;throw error;}
+ if(!response.ok){const error=Error(googleError(service,response.status,data));error.googleStatus=response.status;throw error;}
  return data;
+}
+export function googleError(service,status,data={}){
+ const prefix=service==='sheets'?'BACKUP':'CALENDAR',reasons=JSON.stringify([...(data.error?.errors||[]).map(e=>e.reason),...(data.error?.details||[]).map(e=>e.reason)]);
+ if(/accessNotConfigured|SERVICE_DISABLED/.test(reasons))return prefix+': Enable the Google '+(service==='sheets'?'Sheets':'Calendar')+' API in the service account project.';
+ if(status===401)return prefix+': Google authorization expired or was rejected. Check the deployed service account key.';
+ if(status===429||/rateLimit|quota/i.test(reasons))return prefix+': Google request limit reached. The scheduled job will retry.';
+ if(status===403)return prefix+': Insufficient access. Check sharing permissions: grant the service account '+(service==='sheets'?'Editor access to the backup Sheet.':'Make changes to events access to the selected calendar.');
+ return prefix+': Google rejected the request (HTTP '+status+'). Check the selected resource and API configuration.';
+}
+export function nightlyCycle(settings,now=Date.now()){
+ const zone=settings.Timezone||'Asia/Manila',date=formatLocal(new Date(now),zone,'yyyy-MM-dd'),time=formatLocal(new Date(now),zone,'HH:mm');
+ return time>='02:00'?date:new Date(Date.parse(date+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+}
+export function nightlyDue(settings,last,now=Date.now()){return !Number.isFinite(Date.parse(last||''))||nightlyCycle(settings,Date.parse(last))<nightlyCycle(settings,now);}
+export function automationStatus(settings,properties,now=Date.now()){
+ const cycle=nightlyCycle(settings,now),next=new Date(Date.parse(cycle+'T12:00:00Z')+86400000).toISOString().slice(0,10);
+ return {timezone:settings.Timezone||'Asia/Manila',nextRun:next+' 02:00',calendarEnabled:settings.SyncEnabled==='true',backupEnabled:settings.BackupEnabled==='true',lastSync:properties.LAST_SYNC||'',calendarError:properties.AUTOMATION_ERROR||'',lastBackup:properties.LAST_BACKUP||'',backupError:properties.BACKUP_ERROR||''};
 }
 const eventPath=(cal,id)=>'calendars/'+encodeURIComponent(cal)+'/events/'+encodeURIComponent(id);
 async function findLinked(env,cal,marker){let token='',found=[];do{const q=new URLSearchParams({q:marker,maxResults:'100',showDeleted:'false',singleEvents:'true',...(token?{pageToken:token}:{})});const result=await call(env,'calendar','calendars/'+encodeURIComponent(cal)+'/events?'+q);found.push(...(result?.items||[]).filter(e=>String(e.description||'').replace(/<[^>]*>/g,'\n').split(/\r?\n/).map(x=>x.trim()).includes(marker)));token=result?.nextPageToken||'';if(found.length>1)throw Error('CALENDAR: Duplicate linked events require review.');}while(token);return found[0]||null;}
@@ -32,7 +49,7 @@ export async function syncCalendar(env,domain,snapshot,force=true){
  const {settings,plans}=domain.calendarPlans();if(settings.SyncEnabled!=='true')return {processed:0,failed:0,remaining:0,message:'Synchronization is disabled.'};
  let processed=0,failed=0,remaining=0;const deadline=Date.now()+18000;
  for(const {statement:s,plan:p,marker,entity='Statements'}of plans){
-  if(p.skip)continue;if(!force&&s.nextRetry&&Date.parse(s.nextRetry)>Date.now()){remaining++;continue;}if(s.eventId&&s.fingerprint===p.fingerprint&&!s.syncError&&Date.now()-Date.parse(s.syncedAt||'1970-01-01')<86400000)continue;
+  if(p.skip)continue;if(!force&&s.nextRetry&&Date.parse(s.nextRetry)>Date.now()){remaining++;continue;}if(s.eventId&&s.fingerprint===p.fingerprint&&!s.syncError&&!nightlyDue(settings,s.syncedAt))continue;
   if(processed+failed>=4||Date.now()>deadline){remaining++;continue;}
   try{
    let event=s.eventId?await call(env,'calendar',eventPath(p.cal,s.eventId)):await findLinked(env,p.cal,marker);
@@ -44,9 +61,9 @@ export async function syncCalendar(env,domain,snapshot,force=true){
     catch(error){if(error.googleStatus!==409)throw error;const recovered=await call(env,'calendar',eventPath(p.cal,p.id));if(!domain.calendarOwned(recovered,s))throw error;await call(env,'calendar',eventPath(p.cal,p.id)+'?sendUpdates=none','PATCH',p.body);}
    }
    const now=new Date().toISOString();domain.writeCalendar(s,{...s,calendarId:p.cal,eventId:p.id,syncedAt:now,fingerprint:p.fingerprint,syncError:'',attempts:0,nextRetry:'',dueDate:p.dueDate||s.dueDate,revision:Number(s.revision)+1,updatedAt:now},entity);processed++;
-  }catch{failed++;domain.writeCalendar(s,{...s,syncError:'Calendar synchronization needs review.',attempts:Number(s.attempts||0)+1,nextRetry:new Date(Date.now()+120000).toISOString(),revision:Number(s.revision)+1,updatedAt:new Date().toISOString()},entity);}
+  }catch(error){failed++;domain.writeCalendar(s,{...s,syncError:/^CALENDAR:/.test(error.message)?error.message:'Calendar synchronization needs review.',attempts:Number(s.attempts||0)+1,nextRetry:new Date(Date.now()+120000).toISOString(),revision:Number(s.revision)+1,updatedAt:new Date().toISOString()},entity);}
  }
- domain.property('LAST_SYNC',new Date().toISOString());return {processed,failed,remaining,message:failed?'Some Calendar entries need review.':remaining?'More entries remain in the synchronization queue.':'Calendar synchronization completed.'};
+ if(!failed&&!remaining){domain.property('LAST_SYNC',new Date().toISOString());domain.property('AUTOMATION_ERROR','');}else domain.property('AUTOMATION_ERROR',failed?'Some Calendar entries failed; review their errors.':'Calendar batch pending; continuation scheduled.');return {processed,failed,remaining,message:failed?'Some Calendar entries need review.':remaining?'More entries remain in the synchronization queue.':'Calendar synchronization completed.'};
 }
 export async function backupSheet(env,domain,snapshot){
  const id=snapshot.sourceSheetId;if(!/^[A-Za-z0-9_-]{20,}$/.test(id||''))throw Error('SETUP: Select the backup spreadsheet.');
@@ -72,7 +89,7 @@ export async function googleAction(env,domain,snapshot,action,args){
  if(action==='apiEnableCalendarSync')return enableCalendarSync(env,domain,snapshot);
  if(action==='apiActivateIntegrations')return activateIntegrations(env,domain,snapshot);
  if(action==='apiEnableSheetBackups')return activateSheetBackups(env,domain,snapshot);
- if(action==='apiCalendarTest'){const c=await call(env,'calendar','calendars/'+encodeURIComponent(settings.CalendarId));if(!c)throw Error('CALENDAR: Share the selected calendar with the Google service account.');return {connected:true,timeZone:c.timeZone};}
+ if(action==='apiCalendarTest'){if(!settings.CalendarId)throw Error('CALENDAR: No calendar selected. Choose a calendar in Settings.');const c=await call(env,'calendar','calendars/'+encodeURIComponent(settings.CalendarId));if(!c)throw Error('CALENDAR: Share the selected calendar with the Google service account.');return {connected:true,timeZone:c.timeZone};}
  if(action==='apiCalendars'){const c=await call(env,'calendar','calendars/'+encodeURIComponent(settings.CalendarId||env.OWNER_EMAIL));return c?[{id:c.id,label:c.summary||c.id}]:[];}
  if(action==='apiCreateCalendar'){const c=await call(env,'calendar','calendars','POST',{summary:'BillBills reminders',timeZone:settings.Timezone});await call(env,'calendar','calendars/'+encodeURIComponent(c.id)+'/acl?sendNotifications=false','POST',{role:'owner',scope:{type:'user',value:env.OWNER_EMAIL}});return {id:c.id,label:c.summary};}
  if(action==='apiCalendarMigrationPreview'){
@@ -83,17 +100,13 @@ export async function googleAction(env,domain,snapshot,action,args){
  if(action==='apiCalendarRecover')return resumeCalendarMigration(env,domain,snapshot,args[0]);
  throw Error('VALIDATION: Unsupported Google operation.');
 }
-export async function runGoogleAutomation(env,domain,snapshot){
+export async function runGoogleAutomation(env,domain,snapshot,{includeBackup=true}={}){
  let sync={processed:0,failed:0,remaining:0};const settings=domain.inspect().settings;
- if(settings.SyncEnabled==='true')sync=await syncCalendar(env,domain,snapshot,false);
- if(backupDue(settings,snapshot.properties))try{await backupSheet(env,domain,snapshot);}catch(error){domain.property('BACKUP_ERROR',String(error.message));sync.backupFailed=true;}
+ if(settings.SyncEnabled==='true'&&nightlyDue(settings,snapshot.properties.LAST_SYNC))try{sync=await syncCalendar(env,domain,snapshot,false);}catch(error){domain.property('AUTOMATION_ERROR',/^(SETUP|CALENDAR):/.test(error.message)?error.message:'CALENDAR: Synchronization failed. Check Calendar access.');sync.failed++;}
+ if(includeBackup&&backupDue(settings,snapshot.properties))try{await backupSheet(env,domain,snapshot);}catch(error){domain.property('BACKUP_ERROR',String(error.message));sync.backupFailed=true;}
  return sync;
 }
-
-export function backupDue(settings,properties,now=Date.now()){
- const last=Date.parse(properties.LAST_BACKUP||''),days=Number(settings.BackupDays||1);
- return settings.BackupEnabled==='true'&&(!Number.isFinite(last)||now-last>=Math.max(1,Number.isFinite(days)?days:1)*86400000);
-}
+export function backupDue(settings,properties,now=Date.now()){return settings.BackupEnabled==='true'&&nightlyDue(settings,properties.LAST_BACKUP,now);}
 
 export async function activateSheetBackups(env,domain,snapshot){
  const sheet=await call(env,'sheets','spreadsheets/'+encodeURIComponent(snapshot.sourceSheetId)+'?fields=spreadsheetId');
