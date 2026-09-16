@@ -36,7 +36,7 @@ function billsListView_(db,issues,entity,filters,page,sort) {
 }
 
 function billsList(entity,filters,page,sort) {
-  return guard_(()=>{const db=load_();if(entity==='LoanList'||entity==='UpcomingLoans')return billsLoanList_(db,entity,filters||{},page,sort);if(entity==='ReviewTransactions')return billsReviewTransactions_(db,filters||{},page,sort);if(entity==='InstallmentOptions')return billsInstallmentOptions_(db,filters||{},page);if(entity==='LoanDashboard')return loanDashboard_(db,filters||{});if(entity==='OverviewCharts')return billsCharts_(db,filters||{});if(entity==='DuplicateReview')return billsDuplicates_(db,page);return billsListView_(db,review_(db),entity,filters,page,sort);},true);
+  return guard_(()=>{const db=load_();if(entity==='StatementBreakdown')return billsStatementBreakdown_(db,filters||{},page,sort);if(entity==='LoanList'||entity==='UpcomingLoans')return billsLoanList_(db,entity,filters||{},page,sort);if(entity==='ReviewTransactions')return billsReviewTransactions_(db,filters||{},page,sort);if(entity==='InstallmentOptions')return billsInstallmentOptions_(db,filters||{},page);if(entity==='LoanDashboard')return loanDashboard_(db,filters||{});if(entity==='OverviewCharts')return billsCharts_(db,filters||{});if(entity==='DuplicateReview')return billsDuplicates_(db,page);return billsListView_(db,review_(db),entity,filters,page,sort);},true);
 }
 
 function billsChanged_(db,changes,opId,kind) {
@@ -328,9 +328,9 @@ function loanRecordIssues_(entity,r,db,add){
  if(entity==='LoanAllocations'){if(Number(r.amountMinor)<=0)add('Allocation must be positive');const p=db.LoanPayments.find(p=>p.id===r.loanPaymentId),loan=db.Loans.find(l=>l.id===r.loanId);if(p&&p.loanId!==r.loanId)add('Payment belongs to another loan');if(!Number.isInteger(Number(r.installmentNumber))||r.installmentNumber<1||loan&&r.installmentNumber>loan.termMonths)add('Invalid installment number');}
 }
 function billsLoanList_(db,entity,f,page,sort){
- const totals={},today=today_(db);let rows=db.Loans.map(loan=>{const principal=loanPrincipal_(db,loan);const installments=loanInstallments_(db,loan),next=installments.find(i=>i.remainingMinor===null||i.remainingMinor>0),known=installments.reduce((sum,i)=>sum+(i.remainingMinor||0),0),unknown=installments.filter(i=>i.remainingMinor===null).length;
- if(loan.status==='ACTIVE'){const t=totals[loan.currency]||(totals[loan.currency]={remaining:0,overdue:0,unknown:0,principalMinor:0,principalIncluded:0,principalExcluded:0});if(principal.complete){t.principalMinor=addMinor_(t.principalMinor,principal.remainingMinor);t.principalIncluded++;}else t.principalExcluded++;t.remaining+=known;t.unknown+=unknown;t.overdue+=installments.filter(i=>i.dueDate<today).reduce((sum,i)=>sum+(i.remainingMinor||0),0);}
- return {...loan,principal,_token:token_(loan),nextDueDate:next?.dueDate||'',nextRemainingMinor:next?.remainingMinor??null,nextStatus:next?.status||'',scheduledRemainingMinor:known,unknownInstallments:unknown};
+ const totals={},today=today_(db);let rows=db.Loans.map(loan=>{const principal=loanPrincipal_(db,loan),remainder=loanFixedRemainder_(db,loan);const installments=loanInstallments_(db,loan),next=installments.find(i=>i.remainingMinor===null||i.remainingMinor>0),known=installments.reduce((sum,i)=>sum+(i.remainingMinor||0),0),unknown=installments.filter(i=>i.remainingMinor===null).length;
+ if(loan.status==='ACTIVE'){const t=totals[loan.currency]||(totals[loan.currency]={remaining:0,overdue:0,unknown:0,principalMinor:0,principalIncluded:0,principalExcluded:0,fixedRemainderMinor:0,fixedIncluded:0,fixedExcluded:0});if(remainder.available){t.fixedRemainderMinor=addMinor_(t.fixedRemainderMinor,remainder.remainingMinor);t.fixedIncluded++;}else t.fixedExcluded++;if(principal.complete){t.principalMinor=addMinor_(t.principalMinor,principal.remainingMinor);t.principalIncluded++;}else t.principalExcluded++;t.remaining+=known;t.unknown+=unknown;t.overdue+=installments.filter(i=>i.dueDate<today).reduce((sum,i)=>sum+(i.remainingMinor||0),0);}
+ return {...loan,principal,fixedRemainder:remainder,_token:token_(loan),nextDueDate:next?.dueDate||'',nextRemainingMinor:next?.remainingMinor??null,nextStatus:next?.status||'',scheduledRemainingMinor:known,unknownInstallments:unknown};
  });
  if(entity==='UpcomingLoans'){rows=rows.filter(r=>r.status==='ACTIVE').flatMap(r=>{const unpaid=loanInstallments_(db,r).filter(i=>i.remainingMinor===null||i.remainingMinor>0),next=unpaid.find(i=>i.dueDate>=today);return unpaid.filter(i=>i.dueDate<today||i===next).map(i=>({...r,loanId:r.id,installmentNumber:i.number,nextDueDate:i.dueDate,nextRemainingMinor:i.remainingMinor,nextStatus:i.status}));});}
  const q=String(f.q||'').trim().toLowerCase();rows=rows.filter(r=>(!q||(r.nickname+' '+r.lender+' '+(r.notes||'')).toLowerCase().includes(q))&&(!f.currency||r.currency===f.currency)&&(!f.status||r.status===f.status));
@@ -338,7 +338,7 @@ function billsLoanList_(db,entity,f,page,sort){
  rows.sort((a,b)=>{const x=a[key],y=b[key],xm=x==null||x==='',ym=y==null||y==='';if(xm!==ym)return xm?1:-1;const n=['scheduledRemainingMinor','termMonths'].includes(key)?Number(x)-Number(y):String(x||'').localeCompare(String(y||''));return n*(direction==='desc'?-1:1)||(entity==='UpcomingLoans'?a.nickname.localeCompare(b.nickname)||a.installmentNumber-b.installmentNumber:0)||a.id.localeCompare(b.id);});
  const p=Math.min(Math.max(0,Math.floor(Number(page)||0)),Math.max(0,Math.ceil(rows.length/40)-1));return {rows:rows.slice(p*40,p*40+40),total:rows.length,page:p,issues:[],loanTotals:totals};
 }
-function loanDashboard_(db,f){const loans=db.Loans.filter(l=>!f.loanId||l.id===f.loanId);return {loans:loans.map(l=>({...l,_token:token_(l),installments:loanInstallments_(db,l),principal:loanPrincipal_(db,l)})),balances:db.LoanBalances.filter(b=>!f.loanId||b.loanId===f.loanId),schedules:db.LoanSchedules.filter(s=>!f.loanId||s.loanId===f.loanId).map(s=>({...s,_token:token_(s)})),payments:db.LoanPayments.filter(p=>!f.loanId||p.loanId===f.loanId).map(p=>({...p,_token:token_(p),allocations:db.LoanAllocations.filter(a=>a.loanPaymentId===p.id)}))};}
+function loanDashboard_(db,f){const loans=db.Loans.filter(l=>!f.loanId||l.id===f.loanId);return {loans:loans.map(l=>({...l,_token:token_(l),installments:loanInstallments_(db,l),principal:loanPrincipal_(db,l),fixedRemainder:loanFixedRemainder_(db,l)})),balances:db.LoanBalances.filter(b=>!f.loanId||b.loanId===f.loanId),schedules:db.LoanSchedules.filter(s=>!f.loanId||s.loanId===f.loanId).map(s=>({...s,_token:token_(s)})),payments:db.LoanPayments.filter(p=>!f.loanId||p.loanId===f.loanId).map(p=>({...p,_token:token_(p),allocations:db.LoanAllocations.filter(a=>a.loanPaymentId===p.id)}))};}
 function billsReviewTransactions_(db,filters,page,sort){
  const issues=review_(db),byId=new Map();for(const issue of issues.filter(i=>i.entity==='Transactions')){if(!byId.has(issue.id))byId.set(issue.id,[]);byId.get(issue.id).push(issue);}
  const rows=filtered_('Transactions',db,filters,sort||'transactionDate:desc').filter(r=>byId.has(r.id)),p=Math.min(Math.max(0,Math.floor(Number(page)||0)),Math.max(0,Math.ceil(rows.length/40)-1));
@@ -412,4 +412,18 @@ function loanPrincipal_(db,loan){
  if(missing.length)return {...result,status:'Incomplete principal details',missingCount:missing.length};
  const remaining=payments.reduce((n,p)=>addMinor_(n,-Number(p.principalMinor)),base);if(remaining<0)return {...result,status:'Reconciliation needed: principal deductions exceed balance'};
  return {...result,remainingMinor:remaining,complete:true,status:'Confirmed'};
+}
+
+function loanFixedRemainder_(db,loan){
+ const available=loan.principalMinor!==''&&loan.principalMinor!==null&&loan.principalMinor!==undefined;
+ const scheduledMinor=loanInstallments_(db,loan).reduce((total,i)=>i.amountMinor===null?total:addMinor_(total,i.amountMinor),0);
+ return {available,principalMinor:available?Number(loan.principalMinor):null,scheduledMinor,remainingMinor:available?addMinor_(Number(loan.principalMinor),-scheduledMinor):null};
+}
+function billsStatementBreakdown_(db,f,page,sort){
+ if(!f.statementId||!db.Statements.some(s=>s.id===f.statementId))fail_('VALIDATION: Choose an existing statement.');
+ const included=new Set(['PURCHASE','FEE','INTEREST','CASH_ADVANCE','INSTALLMENT','REFUND','REBATE']),groups=new Map();
+ for(const t of db.Transactions.filter(t=>t.statementId===f.statementId&&t.status==='ACTIVE')){const key=JSON.stringify([t.cardId||'',t.currency]),card=db.Cards.find(c=>c.id===t.cardId);let g=groups.get(key);if(!g){g={cardId:t.cardId||'',nickname:card?.nickname||'No card assigned',relationship:card?.relationship||'',currency:t.currency,count:0,subtotalMinor:0,other:[]};groups.set(key,g);}g.count++;if(included.has(t.type))g.subtotalMinor=addMinor_(g.subtotalMinor,t.amountMinor);else{let other=g.other.find(x=>x.type===t.type);if(!other){other={type:t.type,count:0,amountMinor:0};g.other.push(other);}other.count++;other.amountMinor=addMinor_(other.amountMinor,t.amountMinor);}}
+ const fields=new Set(['description','cardId','transactionDate','postingDate','amountMinor','currency','type']),parts=String(sort||'transactionDate:desc').split(':'),order=(fields.has(parts[0])?parts[0]:'transactionDate')+':'+(parts[1]==='asc'?'asc':'desc');
+ const filters={statementId:f.statementId,status:'ACTIVE',q:String(f.q||''),...(f.cardId?{cardId:f.cardId}:{}),...(f.noCard?{noCard:'true'}:{}),...(f.currency?{currency:f.currency}:{})};
+ const rows=filtered_('Transactions',db,filters,order),p=Math.min(Math.max(0,Math.floor(Number(page)||0)),Math.max(0,Math.ceil(rows.length/40)-1));return {groups:[...groups.values()].sort((a,b)=>a.nickname.localeCompare(b.nickname)||a.currency.localeCompare(b.currency)||a.cardId.localeCompare(b.cardId)),rows:rows.slice(p*40,p*40+40).map(r=>decorate_('Transactions',r,db)),total:rows.length,page:p};
 }

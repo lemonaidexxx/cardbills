@@ -77,3 +77,5 @@ th{font-weight:600;letter-spacing:.005em}td{line-height:1.55}
 
 .loan-details{display:grid;gap:20px}.loan-details>h3,.loan-details>p{margin:0}.loan-details section>h3{margin-bottom:12px}.loan-details .table-scroll{max-height:48vh}.loan-details th{white-space:nowrap}.loan-details td{font-variant-numeric:tabular-nums}.loan-details .editor-secondary{gap:10px}
 .loan-details{grid-template-columns:minmax(0,1fr);min-width:0}.loan-details>*{min-width:0}.loan-details p{white-space:normal;overflow-wrap:anywhere}.loan-details .table-scroll{width:100%}
+
+.statement-breakdown{min-width:0}.statement-breakdown .statement-grid{margin:16px 0}.statement-breakdown .statement-overview{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left}.statement-breakdown [aria-pressed=true]{border-color:#0071e3;background:#e8edf5}.statement-breakdown>.table-scroll{margin-top:16px}
