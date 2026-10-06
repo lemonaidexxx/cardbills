@@ -1,3 +1,4 @@
+import {serviceRestriction} from './service-errors.mjs';
 const enc = new TextEncoder();
 const cookieName = '__Host-cardbills';
 const sessionSeconds = 1800;
@@ -97,6 +98,8 @@ async function remoteJson(url, options, message = 'The service is temporarily un
     catch { throw new HttpError(503, authRequest ? 'The authentication service returned an invalid response (AUTH_RESPONSE).' : message); }
   }
   if (!response.ok) {
+    const restriction = serviceRestriction(response.status, data);
+    if (restriction) throw new HttpError(503, restriction);
     if (response.status === 429) throw new HttpError(429, 'Wait before trying again.');
     if (authRequest) {
       if (response.status >= 500) throw new HttpError(503, 'The authentication service is temporarily unavailable (AUTH_SERVICE).');

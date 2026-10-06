@@ -21,7 +21,7 @@ function provider(t, options={}) {
       assert.equal(JSON.parse(body.payload).actor,owner);
       return reply({ok:true,data:{checked:true}});
     }
-    if(url.pathname==='/rest/v1/rpc/cardbills_take_attempt')return reply(state.rateAllowed);
+    if(url.pathname==='/rest/v1/rpc/cardbills_take_attempt')return options.quotaExceeded?reply({message:'exceed_egress_quota private provider details'},402):reply(state.rateAllowed);
     if(url.pathname==='/rest/v1/cardbills_sessions'){
       assert.equal(init.headers.apikey,env.SUPABASE_SECRET_KEY);
       assert.equal(init.headers.Authorization,undefined);
@@ -70,6 +70,11 @@ test('password login, MFA, signed RPC and logout complete with mocked providers'
 
 test('incorrect password creates no application session',async t=>{
   const p=provider(t);const r=await p.request('/api/login',{username:'owner',password:'incorrect'});assert.equal(r.status,401);assert.equal(p.rows.size,0);
+});
+
+test('restricted database prevents login with actionable quota error and no session',async t=>{
+  const p=provider(t,{quotaExceeded:true});const r=await p.request('/api/login',{username:'owner',password:'correct-password'});
+  assert.equal(r.status,503);const body=await r.text();assert.match(body,/data-transfer quota exceeded/);assert.doesNotMatch(body,/private provider details/);assert.equal(p.rows.size,0);assert.equal(p.seen.some(x=>x.path==='/auth/v1/token'),false);
 });
 test('a different verified account is rejected',async t=>{
   const p=provider(t,{otherOwner:true});const r=await p.request('/api/login',{username:'owner',password:'correct-password'});assert.equal(r.status,401);assert.equal(p.rows.size,0);

@@ -1,9 +1,9 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {createDomain} from './domain.generated.mjs';
-import {databaseRpc,DatabaseError} from './database.mjs';
-import {googleAction,runGoogleAutomation,backupSheet,backupDue,automationStatus} from './google.mjs';
+import {databaseRpc,DatabaseError,automationState} from './database.mjs';
+import {googleAction,runGoogleAutomation,backupSheet,backupDue,automationStatus,nightlyDue} from './google.mjs';
 
-export const FINANCIAL_REVISION='billbills-20260917-22';
+export const FINANCIAL_REVISION='billbills-20261006-23';
 const readActions=new Set(['apiIdentity','apiBootstrap','apiList','apiImportLookups','apiPackageReceipt','apiInstallmentSchedule','apiReport','apiImportPreview','apiImportPage','apiImportStatus','apiSyncPreview','apiCalendars','apiCalendarTest','apiSyncStatus','apiExportDatabase','apiCalendarMigrationPreview']);
 const googleActions=new Set(['apiBackup','apiCalendarTest','apiCalendars','apiCreateCalendar','apiSync','apiSyncPreview','apiCalendarMigrationPreview','apiCalendarMigrate','apiActivateIntegrations','apiEnableSheetBackups','apiEnableCalendarSync']);
 const explicitIds={apiSave:3,apiSettings:2,apiPackageCommit:1,apiResolveMissing:3,apiImportCommit:4,apiCalendarMigrate:2};
@@ -116,10 +116,15 @@ export class BillsBillsEngine {
   }
   async automate(){
     const env=this.env;if(!env.GOOGLE_SERVICE_ACCOUNT_JSON)return reply({skipped:true});
-    const snapshot=await databaseRpc(env,'bb_worker_snapshot',{p_owner:env.OWNER_USER_ID,p_full:false});
-    const settings=createDomain(snapshot,{id:env.OWNER_USER_ID,email:env.OWNER_EMAIL}).inspect().settings;
-    if(settings.SyncEnabled!=='true')return this.backup();
-    let calendar;try{calendar=await this.serial(()=>this.legacyAutomation());}catch{calendar=reply({error:'CALENDAR: Scheduled synchronization failed.'},502);}const backup=await this.backup();return reply({calendar:await calendar.json(),backup:await backup.json()});
+    const {settings,properties}=await automationState(env);
+    if(properties.DATABASE_AUTOMATION!=='true')return reply({skipped:true});
+    const calendarDue=settings.SyncEnabled==='true'&&nightlyDue(settings,properties.LAST_SYNC);
+    const sheetDue=backupDue(settings,properties);
+    if(!calendarDue&&!sheetDue)return reply({skipped:true});
+    let calendar=reply({skipped:true});
+    if(calendarDue)try{calendar=await this.serial(()=>this.legacyAutomation());}catch{calendar=reply({error:'CALENDAR: Scheduled synchronization failed.'},502);}
+    const backup=sheetDue?await this.backup():reply({skipped:true});
+    return reply({calendar:await calendar.json(),backup:await backup.json()});
   }
   async legacyAutomation(){
     const env=this.env;
